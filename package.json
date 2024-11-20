@@ -18,9 +18,15 @@
   },
   "homepage": "https://github.com/quartz-labs/auto-repay-bot#readme",
   "dependencies": {
+    "@coral-xyz/anchor": "0.29.0",
+    "@jup-ag/api": "^6.0.29",
+    "@mrgnlabs/marginfi-client-v2": "^4.0.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.8.2",
     "@solana-developers/helpers": "^2.5.6",
+    "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.4",
     "@types/node": "^22.9.0",
+    "bignumber.js": "^9.1.2",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2"
   }
