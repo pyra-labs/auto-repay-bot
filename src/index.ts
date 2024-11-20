@@ -12,6 +12,7 @@ import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter";
 import { ASSOCIATED_PROGRAM_ID } from "@coral-xyz/anchor/dist/cjs/utils/token";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { PublicKey } from "@solana/web3.js";
+import BigNumber from "bignumber.js";
 
 
 
@@ -158,7 +159,7 @@ export const executeTransaction = async (
         ] = await Promise.all([autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
-        const amountSolUi = amountLamports / LAMPORTS_PER_SOL;
+        const amountSolUi = new BigNumber(amountLamports).div(LAMPORTS_PER_SOL);
         const { flashloanTx } = await marginfiAccount.makeLoopTx(
             amountSolUi,
             amountSolUi,
