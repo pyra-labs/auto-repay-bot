@@ -97,43 +97,23 @@ export class AutoRepayBot {
         while (true) {
             const vaults = await this.getAllUsers();
 
-            userLoop: for (const vault of vaults) {
+            for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
                 const owner = vault.account.owner;
 
-                let driftUser: DriftUser;
                 try {
-                    driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient);
+                    const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient);
                     await driftUser.initialize();
 
-                    const health = driftUser.getHealth();
-                    if (health != 0) continue;
+                    const driftHealth = driftUser.getHealth();
+                    const quartzHealth = this.getQuartzHealth(driftHealth);
+
+                    if (quartzHealth == 0) {
+                        this.attemptAutoRepay(vaultAddress, owner, driftUser);
+                    };
                 } catch (error) {
-                    console.log(`Error finding Drift User for ${vault.account.owner}: ${error}`);
-                    continue;
+                    console.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                 }
-
-                console.log(`Executing auto-repay for ${vault}`);
-                for (let retry = 0; retry < this.maxRetries; retry++) {
-                    try {
-                        const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
-                        if (usdcBalance.gte(ZERO)) {
-                            console.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
-                            continue userLoop;
-                        }
-
-                        const loanAmount = Math.abs(usdcBalance.toNumber());
-                        const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmount);
-
-                        console.log(`Executed auto-repay for ${owner}, signature: ${signature}`);
-                        continue userLoop;
-                    } catch (error) {
-                        console.log(`Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
-                        continue;
-                    }
-                }
-
-                console.error(`Failed to execute auto-repay for ${vault.account.owner}`);
             }
         }
     }
@@ -141,6 +121,37 @@ export class AutoRepayBot {
     private async getAllUsers(): Promise<ProgramAccount[]> {
         const vaults = await this.program.account.vault.all();
         return vaults;
+    }
+
+    private getQuartzHealth(driftHealth: number): number {
+        return driftHealth;
+    }
+
+    private async attemptAutoRepay(
+        vaultAddress: PublicKey, 
+        owner: PublicKey, 
+        driftUser: DriftUser
+    ): Promise<void> {
+        for (let retry = 0; retry < this.maxRetries; retry++) {
+            try {
+                const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
+                if (usdcBalance.gte(ZERO)) {
+                    console.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
+                    return;
+                }
+
+                const loanAmount = Math.abs(usdcBalance.toNumber());
+                const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmount);
+
+                console.log(`Executed auto-repay for ${owner}, signature: ${signature}`);
+                return;
+            } catch (error) {
+                console.log(`Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
+                continue;
+            }
+        }
+
+        console.error(`Failed to execute auto-repay for ${owner}`);
     }
 
     private async executeAutoRepay (
