@@ -3,6 +3,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { getDriftUser } from "./helpers";
 
 export class DriftUser {
+    private isInitialized: boolean = false;
     private authority: PublicKey;
     private connection: Connection;
     private driftClient: DriftClient;
@@ -19,8 +20,7 @@ export class DriftUser {
         this.driftClient = driftClient;
     }
 
-    async initialize(): Promise<void> {
-        console.log(`Initializing DriftUser with authority ${this.authority}`);
+    public async initialize(): Promise<void> {
         const [ userAccount ] = await fetchUserAccountsUsingKeys(
             this.connection, 
             this.driftClient.program, 
@@ -28,9 +28,12 @@ export class DriftUser {
         );
         if (!userAccount) throw new Error("Drift user not found");
         this.userAccount = userAccount;
+        this.isInitialized = true;
     }
 
-    async getHealth(): Promise<number> {
+    public getHealth(): number{
+        if (!this.isInitialized) throw new Error("DriftUser not initialized");
+
         if (this.isBeingLiquidated()) return 0;
 
         const totalCollateral = this.getTotalCollateral('Maintenance');
@@ -56,6 +59,8 @@ export class DriftUser {
     }
 
     public getTokenAmount(marketIndex: number): BN {
+        if (!this.isInitialized) throw new Error("DriftUser not initialized");
+
 		const spotPosition = this.userAccount.spotPositions.find(
 			(position) => position.marketIndex === marketIndex
 		);
@@ -63,7 +68,7 @@ export class DriftUser {
 		if (spotPosition === undefined) {
 			return ZERO;
 		}
-        
+
 		const spotMarket = this.driftClient.getSpotMarketAccount(marketIndex)!;
 		return getSignedTokenAmount(
 			getTokenAmount(

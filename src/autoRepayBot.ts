@@ -106,7 +106,7 @@ export class AutoRepayBot {
                     driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient);
                     await driftUser.initialize();
 
-                    const health = await driftUser.getHealth();
+                    const health = driftUser.getHealth();
                     if (health != 0) continue;
                 } catch (error) {
                     console.log(`Error finding Drift User for ${vault.account.owner}: ${error}`);
@@ -116,7 +116,7 @@ export class AutoRepayBot {
                 console.log(`Executing auto-repay for ${vault}`);
                 for (let retry = 0; retry < this.maxRetries; retry++) {
                     try {
-                        const usdcBalance = await driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
+                        const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
                         if (usdcBalance.gte(ZERO)) {
                             console.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
                             continue userLoop;
