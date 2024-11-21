@@ -5,7 +5,7 @@ import { FundsProgram } from "../idl/funds_program";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE } from "./constants";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./constants";
 import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault } from "./helpers";
 import { getDriftSpotMarketVault } from "./helpers";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
@@ -124,7 +124,18 @@ export class AutoRepayBot {
     }
 
     private getQuartzHealth(driftHealth: number): number {
-        return driftHealth;
+        if (driftHealth <= 0) return 0;
+        if (driftHealth >= 100) return 100;
+
+        return Math.floor(
+            Math.min(
+                100,
+                Math.max(
+                    0,
+                    (driftHealth - QUARTZ_HEALTH_BUFFER_PERCENTAGE) / (1 - (QUARTZ_HEALTH_BUFFER_PERCENTAGE / 100))
+                )
+            )
+        );
     }
 
     private async attemptAutoRepay(

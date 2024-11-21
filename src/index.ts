@@ -36,16 +36,16 @@ async function fetchAWSSecretManagerService() {
     return keypair;
 }
 
-async function main() {
+async function main(useAWS: boolean) {
     // Initialize connnection
-    dotenv.config();
     const RPC_URL = process.env.RPC_URL;
     if (!RPC_URL) throw new Error("RPC_URL is not set");
     const connection = new Connection(RPC_URL);
 
     // Initialize wallet
-    const keypair = await getKeypairFromEnvironment("SECRET_KEY"); // If using .env file to store secret key (only recommended if self-hosting)
-    // const keypair = await fetchAWSSecretManagerService(); // If using AWS Secret Manager service to store secret key
+    const keypair = useAWS 
+        ? await fetchAWSSecretManagerService() 
+        : await getKeypairFromEnvironment("SECRET_KEY");
     const wallet = new Wallet(keypair);
 
     // Initialize program
@@ -59,4 +59,6 @@ async function main() {
     autoRepayBot.run();
 }
 
-main();
+dotenv.config();
+const useAWS = (process.env.USE_AWS === "true");
+main(useAWS);
