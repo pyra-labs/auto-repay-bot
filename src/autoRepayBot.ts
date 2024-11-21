@@ -1,6 +1,6 @@
 import { BN, Program, ProgramAccount, Wallet } from "@coral-xyz/anchor";
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { DriftClient, fetchUserAccountsUsingKeys, User } from "@drift-labs/sdk";
+import { DriftClient, fetchUserAccountsUsingKeys, User, ZERO } from "@drift-labs/sdk";
 import { FundsProgram } from "../idl/funds_program";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
@@ -116,8 +116,14 @@ export class AutoRepayBot {
                 console.log(`Executing auto-repay for ${vault}`);
                 for (let retry = 0; retry < this.maxRetries; retry++) {
                     try {
-                        const loanAmountBaseUnits = await driftUser.getLoanAmountBaseUnits();
-                        const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmountBaseUnits);
+                        const usdcBalance = await driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
+                        if (usdcBalance.gte(ZERO)) {
+                            console.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
+                            continue userLoop;
+                        }
+
+                        const loanAmount = Math.abs(usdcBalance.toNumber());
+                        const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmount);
 
                         console.log(`Executed auto-repay for ${owner}, signature: ${signature}`);
                         continue userLoop;
@@ -128,7 +134,6 @@ export class AutoRepayBot {
                 }
 
                 console.error(`Failed to execute auto-repay for ${vault.account.owner}`);
-                
             }
         }
     }

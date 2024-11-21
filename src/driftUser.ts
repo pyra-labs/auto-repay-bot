@@ -55,9 +55,25 @@ export class DriftUser {
 		);
     }
 
-    async getLoanAmountBaseUnits(): Promise<number> {
-        throw new Error("Not implemented");
-    }
+    public getTokenAmount(marketIndex: number): BN {
+		const spotPosition = this.userAccount.spotPositions.find(
+			(position) => position.marketIndex === marketIndex
+		);
+
+		if (spotPosition === undefined) {
+			return ZERO;
+		}
+        
+		const spotMarket = this.driftClient.getSpotMarketAccount(marketIndex)!;
+		return getSignedTokenAmount(
+			getTokenAmount(
+				spotPosition.scaledBalance,
+				spotMarket,
+				spotPosition.balanceType
+			),
+			spotPosition.balanceType
+		);
+	}
 
     private isBeingLiquidated(): boolean {
 		return (
