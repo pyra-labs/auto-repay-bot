@@ -4,7 +4,7 @@ import { DriftClient, fetchUserAccountsUsingKeys, User, ZERO } from "@drift-labs
 import { FundsProgram } from "../idl/funds_program";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./constants";
 import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault } from "./helpers";
 import { getDriftSpotMarketVault } from "./helpers";
@@ -54,9 +54,19 @@ export class AutoRepayBot {
         if (!quartzLookupTable) throw Error("Address Lookup Table account not found");
         this.quartzLookupTable = quartzLookupTable;
 
-        this.walletUsdc = await getAssociatedTokenAddress(USDC_MINT, this.wallet.publicKey);
-        this.walletWSol = await getAssociatedTokenAddress(WSOL_MINT, this.wallet.publicKey);
-        // TODO - Throw an error if either ATA is not initialized
+        // Initialize ATAs
+        this.walletUsdc = await getOrCreateAssociatedTokenAccount(
+            this.connection,
+            this.wallet.payer,
+            USDC_MINT,
+            this.wallet.publicKey
+        ).then((account) => account.address);
+        this.walletWSol = await getOrCreateAssociatedTokenAccount(
+            this.connection,
+            this.wallet.payer,
+            WSOL_MINT,
+            this.wallet.publicKey
+        ).then((account) => account.address);
 
         // Initialize Drift
         this.driftClient = new DriftClient({
@@ -95,7 +105,7 @@ export class AutoRepayBot {
         await this.initialize();
 
         while (true) {
-            const vaults = await this.getAllUsers();
+            const vaults = await this.getAllVaults();
 
             for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
@@ -118,7 +128,7 @@ export class AutoRepayBot {
         }
     }
 
-    private async getAllUsers(): Promise<ProgramAccount[]> {
+    private async getAllVaults(): Promise<ProgramAccount[]> {
         const vaults = await this.program.account.vault.all();
         return vaults;
     }
@@ -154,6 +164,9 @@ export class AutoRepayBot {
                 const loanAmount = Math.abs(usdcBalance.toNumber());
                 const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmount);
 
+                const latestBlockhash = await this.connection.getLatestBlockhash();
+                await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
+
                 console.log(`Executed auto-repay for ${owner}, signature: ${signature}`);
                 return;
             } catch (error) {
@@ -186,8 +199,8 @@ export class AutoRepayBot {
                 vault: vault,
                 vaultSpl: vaultUsdc,
                 owner: owner,
-                // caller: this.wallet.publicKey,
-                ownerSpl: this.walletUsdc,
+                caller: this.wallet.publicKey,
+                callerSpl: this.walletUsdc,
                 splMint: USDC_MINT,
                 driftUser: driftUser,
                 driftUserStats: driftUserStats,
@@ -213,8 +226,8 @@ export class AutoRepayBot {
                 vault: vault,
                 vaultSpl: vaultWsol,
                 owner: owner,
-                // caller: this.wallet.publicKey,
-                ownerSpl: this.walletWSol,
+                caller: this.wallet.publicKey,
+                callerSpl: this.walletWSol,
                 splMint: WSOL_MINT,
                 driftUser: driftUser,
                 driftUserStats: driftUserStats,
@@ -222,7 +235,6 @@ export class AutoRepayBot {
                 spotMarketVault: this.driftSpotMarketSol,
                 driftSigner: DRIFT_SIGNER,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 driftProgram: DRIFT_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 depositPriceUpdate: this.usdcUsdPriceFeedAccount,
@@ -241,7 +253,7 @@ export class AutoRepayBot {
         const jupiterSwapPromise = getJupiterSwapIx(this.wallet.publicKey, this.connection, jupiterQuote);
 
         const amountLamports = Number(jupiterQuote.inAmount);
-        const amountLamportsWithSlippage = amountLamports * (1.01);
+        const amountLamportsWithSlippage = Math.floor(amountLamports * (1.01));
         const walletWsolBalance = Number(preLoanBalance) + amountLamportsWithSlippage;
 
         const autoRepayStartPromise = this.program.methods
@@ -250,7 +262,11 @@ export class AutoRepayBot {
                 caller: this.wallet.publicKey,
                 callerWithdrawSpl: this.walletWSol,
                 withdrawMint: WSOL_MINT,
+                vault: vault,
+                vaultWithdrawSpl: vaultWsol,
+                owner: owner,
                 tokenProgram: TOKEN_PROGRAM_ID,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
             })
@@ -264,7 +280,7 @@ export class AutoRepayBot {
         ] = await Promise.all([autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
-        const amountSolUi = new BigNumber(amountLamports).div(LAMPORTS_PER_SOL);
+        const amountSolUi = new BigNumber(amountLamportsWithSlippage).div(LAMPORTS_PER_SOL);
         const { flashloanTx } = await this.marginfiAccount.makeLoopTx(
             amountSolUi,
             amountSolUi,

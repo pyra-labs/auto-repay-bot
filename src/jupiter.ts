@@ -30,7 +30,7 @@ export async function getJupiterSwapIx(walletPubkey: PublicKey, connection: Conn
     if (instructions.error) {
         throw new Error("Failed to get swap instructions: " + instructions.error);
     }
-    const { swapInstructionPayload, addressLookupTableAddresses } = instructions;
+    const { swapInstruction, addressLookupTableAddresses } = instructions;
 
     const getAddressLookupTableAccounts = async (
         keys: string[]
@@ -60,13 +60,13 @@ export async function getJupiterSwapIx(walletPubkey: PublicKey, connection: Conn
     );
 
     const ix_jupiterSwap =  new TransactionInstruction({
-        programId: new PublicKey(swapInstructionPayload.programId),
-        keys: swapInstructionPayload.accounts.map((key: any) => ({
+        programId: new PublicKey(swapInstruction.programId),
+        keys: swapInstruction.accounts.map((key: any) => ({
         pubkey: new PublicKey(key.pubkey),
         isSigner: key.isSigner,
         isWritable: key.isWritable,
         })),
-        data: Buffer.from(swapInstructionPayload.data, "base64"),
+        data: Buffer.from(swapInstruction.data, "base64"),
     });
 
     return {

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.19",
+  "version": "0.1.20",
   "name": "funds_program",
   "instructions": [
     {
@@ -54,12 +54,12 @@
         },
         {
           "name": "driftUser",
-          "isMut": true,
+          "isMut": false,
           "isSigner": false
         },
         {
           "name": "driftUserStats",
-          "isMut": true,
+          "isMut": false,
           "isSigner": false
         },
         {
@@ -313,7 +313,27 @@
           "isSigner": false
         },
         {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultWithdrawSpl",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "owner",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
           "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associatedTokenProgram",
           "isMut": false,
           "isSigner": false
         },
@@ -350,11 +370,16 @@
         },
         {
           "name": "owner",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "caller",
           "isMut": true,
           "isSigner": true
         },
         {
-          "name": "ownerSpl",
+          "name": "callerSpl",
           "isMut": true,
           "isSigner": false
         },
@@ -431,11 +456,16 @@
         },
         {
           "name": "owner",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "caller",
           "isMut": true,
           "isSigner": true
         },
         {
-          "name": "ownerSpl",
+          "name": "callerSpl",
           "isMut": true,
           "isSigner": false
         },
@@ -471,11 +501,6 @@
         },
         {
           "name": "tokenProgram",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
-          "name": "associatedTokenProgram",
           "isMut": false,
           "isSigner": false
         },

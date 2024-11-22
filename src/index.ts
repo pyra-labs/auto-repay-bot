@@ -12,9 +12,14 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 
 async function fetchAWSSecretManagerService() {
-    const secret_name = "liquidatorCredentials";
+    const secret_name = process.env.AWS_SECRET_NAME;
+    if (!secret_name) throw new Error("AWS_SECRET_NAME is not set");
+
+    const region = process.env.AWS_REGION;
+    if (!region) throw new Error("AWS_REGION is not set");
+
     const client = new SecretsManagerClient({
-        region: "eu-north-1",
+        region,
     });
 
     let response;
