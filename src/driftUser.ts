@@ -1,6 +1,6 @@
 import { AMM_RESERVE_PRECISION, AMM_RESERVE_PRECISION_EXP, BN, calculateAssetWeight, calculateLiabilityWeight, calculateLiveOracleTwap, calculateMarketMarginRatio, calculateMarketOpenBidAsk, calculatePerpLiabilityValue, calculatePositionPNL, calculateUnrealizedAssetWeight, calculateUnsettledFundingPnl, calculateWorstCasePerpLiabilityValue, DriftClient, fetchUserAccountsUsingKeys, FIVE_MINUTE, getSignedTokenAmount, getStrictTokenValue, getTokenAmount, getWorstCaseTokenAmounts, isSpotPositionAvailable, isVariant, MARGIN_PRECISION, MarginCategory, ONE, OPEN_ORDER_MARGIN_REQUIREMENT, PerpPosition, PRICE_PRECISION, QUOTE_PRECISION, QUOTE_SPOT_MARKET_INDEX, SPOT_MARKET_WEIGHT_PRECISION, SpotBalanceType, SpotMarketAccount, StrictOraclePrice, UserAccount, UserStatus, ZERO } from "@drift-labs/sdk";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { getDriftUser } from "./helpers";
+import { getDriftUser } from "./helpers.js";
 
 export class DriftUser {
     private isInitialized: boolean = false;
@@ -8,7 +8,7 @@ export class DriftUser {
     private connection: Connection;
     private driftClient: DriftClient;
 
-    private userAccount: UserAccount;
+    private userAccount: UserAccount | undefined;
 
     constructor (
         authority: PublicKey,
@@ -61,7 +61,7 @@ export class DriftUser {
     public getTokenAmount(marketIndex: number): BN {
         if (!this.isInitialized) throw new Error("DriftUser not initialized");
 
-		const spotPosition = this.userAccount.spotPositions.find(
+		const spotPosition = this.userAccount!.spotPositions.find(
 			(position) => position.marketIndex === marketIndex
 		);
 
@@ -82,7 +82,7 @@ export class DriftUser {
 
     private isBeingLiquidated(): boolean {
 		return (
-			(this.userAccount.status &
+			(this.userAccount!.status &
 				(UserStatus.BEING_LIQUIDATED | UserStatus.BANKRUPT)) >
 			0
 		);
@@ -131,7 +131,7 @@ export class DriftUser {
 		let netQuoteValue = ZERO;
 		let totalAssetValue = ZERO;
 		let totalLiabilityValue = ZERO;
-		for (const spotPosition of this.userAccount.spotPositions) {
+		for (const spotPosition of this.userAccount!.spotPositions) {
 			const countForBase =
 				marketIndex === undefined || spotPosition.marketIndex === marketIndex;
 
@@ -250,7 +250,7 @@ export class DriftUser {
 				spotMarketAccount,
 				strictOraclePrice,
 				marginCategory,
-				this.userAccount.maxMarginRatio
+				this.userAccount!.maxMarginRatio
 			);
 
 			if (worstCaseTokenAmount.gt(ZERO) && countForBase) {
@@ -283,7 +283,7 @@ export class DriftUser {
 			if (worstCaseQuoteTokenAmount.lt(ZERO) && countForQuote) {
 				let weight = SPOT_MARKET_WEIGHT_PRECISION;
 				if (marginCategory === 'Initial') {
-					weight = BN.max(weight, new BN(this.userAccount.maxMarginRatio));
+					weight = BN.max(weight, new BN(this.userAccount!.maxMarginRatio));
 				}
 
 				const weightedTokenValue = worstCaseQuoteTokenAmount
@@ -337,7 +337,7 @@ export class DriftUser {
 				weight = BN.max(
 					weight,
 					SPOT_MARKET_WEIGHT_PRECISION.addn(
-						this.userAccount.maxMarginRatio
+						this.userAccount!.maxMarginRatio
 					)
 				);
 			}
@@ -381,7 +381,7 @@ export class DriftUser {
 				const userCustomAssetWeight = BN.max(
 					ZERO,
 					SPOT_MARKET_WEIGHT_PRECISION.subn(
-						this.userAccount.maxMarginRatio
+						this.userAccount!.maxMarginRatio
 					)
 				);
 				weight = BN.min(weight, userCustomAssetWeight);
@@ -473,7 +473,7 @@ export class DriftUser {
 	}
 
     private getActivePerpPositions() {
-        return this.userAccount.perpPositions.filter(
+        return this.userAccount!.perpPositions.filter(
 			(pos) =>
 				!pos.baseAssetAmount.eq(ZERO) ||
 				!pos.quoteAssetAmount.eq(ZERO) ||
@@ -677,7 +677,7 @@ export class DriftUser {
 	}
 
     private getPerpPosition(marketIndex: number): PerpPosition | undefined {
-        const activePositions = this.userAccount.perpPositions.filter(
+        const activePositions = this.userAccount!.perpPositions.filter(
 			(pos) =>
 				!pos.baseAssetAmount.eq(ZERO) ||
 				!pos.quoteAssetAmount.eq(ZERO) ||
@@ -823,8 +823,8 @@ export class DriftUser {
 					market,
 					baseAssetAmount.abs(),
 					marginCategory,
-					this.userAccount.maxMarginRatio,
-					isVariant(this.userAccount.marginMode, 'highLeverage')
+					this.userAccount!.maxMarginRatio,
+					isVariant(this.userAccount!.marginMode, 'highLeverage')
 				)
 			);
 

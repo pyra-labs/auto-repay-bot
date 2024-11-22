@@ -1,6 +1,6 @@
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { DRIFT_PROGRAM_ID, QUARTZ_PROGRAM_ID } from "./constants";
+import { DRIFT_PROGRAM_ID, QUARTZ_PROGRAM_ID } from "./constants.js";
 
 export const getVault = (owner: PublicKey) => {
     const [vault] = PublicKey.findProgramAddressSync(

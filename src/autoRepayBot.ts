@@ -1,17 +1,17 @@
 import { BN, Program, ProgramAccount, Wallet } from "@coral-xyz/anchor";
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { DriftClient, fetchUserAccountsUsingKeys, User, ZERO } from "@drift-labs/sdk";
-import { FundsProgram } from "../idl/funds_program";
+import { DriftClient, ZERO } from "@drift-labs/sdk";
+import { FundsProgram } from "./idl/funds_program.js";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./constants";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault } from "./helpers";
-import { getDriftSpotMarketVault } from "./helpers";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault } from "./helpers.js";
+import { getDriftSpotMarketVault } from "./helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
-import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter";
+import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter.js";
 import BigNumber from "bignumber.js";
-import { DriftUser } from "./driftUser";
+import { DriftUser } from "./driftUser.js";
 
 export class AutoRepayBot {
     private isInitialized: boolean = false;
@@ -21,21 +21,21 @@ export class AutoRepayBot {
     private program: Program<FundsProgram>;
     private maxRetries: number;
     
-    private quartzLookupTable: AddressLookupTableAccount;
-    private walletUsdc: PublicKey;
-    private walletWSol: PublicKey;
+    private quartzLookupTable: AddressLookupTableAccount | undefined;
+    private walletUsdc: PublicKey | undefined;
+    private walletWSol: PublicKey | undefined;
 
-    private driftClient: DriftClient;
+    private driftClient: DriftClient | undefined;
     private driftState: PublicKey = getDriftState();
     private driftSpotMarketSol: PublicKey = getDriftSpotMarketVault(DRIFT_MARKET_INDEX_SOL);
     private driftSpotMarketUsdc: PublicKey = getDriftSpotMarketVault(DRIFT_MARKET_INDEX_USDC);
 
-    private marginfiAccount: MarginfiAccountWrapper;
-    private wSolBank: PublicKey;
+    private marginfiAccount: MarginfiAccountWrapper | undefined;
+    private wSolBank: PublicKey | undefined;
 
-    private pythSolanaReceiver: PythSolanaReceiver;
-    private solUsdPriceFeedAccount: PublicKey;
-    private usdcUsdPriceFeedAccount: PublicKey;
+    private pythSolanaReceiver: PythSolanaReceiver | undefined;
+    private solUsdPriceFeedAccount: PublicKey | undefined;
+    private usdcUsdPriceFeedAccount: PublicKey | undefined;
 
     constructor(
         connection: Connection,
@@ -112,7 +112,7 @@ export class AutoRepayBot {
                 const owner = vault.account.owner;
 
                 try {
-                    const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient);
+                    const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
                     await driftUser.initialize();
 
                     const driftHealth = driftUser.getHealth();
@@ -191,7 +191,7 @@ export class AutoRepayBot {
         const driftUserStats = getDriftUserStats(vault);
 
         const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, loanAmountBaseUnits);
-        const preLoanBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol).then(res => res.value.amount);
+        const preLoanBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol!).then(res => res.value.amount);
 
         const autoRepayDepositPromise = this.program.methods
             .autoRepayDeposit(DRIFT_MARKET_INDEX_USDC)
@@ -281,13 +281,13 @@ export class AutoRepayBot {
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
         const amountSolUi = new BigNumber(amountLamportsWithSlippage).div(LAMPORTS_PER_SOL);
-        const { flashloanTx } = await this.marginfiAccount.makeLoopTx(
+        const { flashloanTx } = await this.marginfiAccount!.makeLoopTx(
             amountSolUi,
             amountSolUi,
-            this.wSolBank,
-            this.wSolBank,
+            this.wSolBank!,
+            this.wSolBank!,
             [ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw],
-            [this.quartzLookupTable, ...jupiterLookupTables],
+            [this.quartzLookupTable!, ...jupiterLookupTables],
             0.002,
             false
         );

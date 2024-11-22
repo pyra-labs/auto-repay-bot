@@ -2,10 +2,10 @@ import dotenv from "dotenv";
 import { getKeypairFromEnvironment } from "@solana-developers/helpers";
 import { Connection, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Idl, Program, setProvider, Wallet } from "@coral-xyz/anchor";
-import quartzIdl from "../idl/funds_program.json";
-import { FundsProgram } from "../idl/funds_program";
-import { QUARTZ_PROGRAM_ID } from "./constants";
-import { AutoRepayBot } from "./autoRepayBot";
+import quartzIdl from "./idl/funds_program.json";
+import { FundsProgram } from "./idl/funds_program";
+import { QUARTZ_PROGRAM_ID } from "./constants.js";
+import { AutoRepayBot } from "./autoRepayBot.js";
 import {
     SecretsManagerClient,
     GetSecretValueCommand,
@@ -33,11 +33,11 @@ async function fetchAWSSecretManagerService() {
     } catch (error) {
         throw new Error(`Failed to get secret key from AWS: ${error}`);
     }
-    const secret = response.SecretString;
-
-    console.log(secret);
-    const keypair = Keypair.fromSecretKey(secret);
-
+    const secretString = await response.SecretString;
+    if (!secretString) throw new Error("Secret string is not set");
+    const secret = JSON.parse(secretString);
+    const keypair = Keypair.fromSecretKey(secret.liquidatorSecret);
+    
     return keypair;
 }
 
