@@ -53,6 +53,9 @@ async function main(useAWS: boolean) {
     app.get('/', (req: Request, res: Response) => {
         res.status(200).json({ status: 'OK' });
     });
+    app.listen(port, () => {
+        console.log(`Server running on port ${port}`);
+    });
 
     // Initialize connnection
     const RPC_URL = process.env.RPC_URL;
