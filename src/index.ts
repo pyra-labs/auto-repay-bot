@@ -38,6 +38,7 @@ async function fetchAWSSecretManagerService() {
     const secret = JSON.parse(secretString);
     const secretArray = Uint8Array.from(secret.liquidatorSecret);
     console.log(secret.liquidatorSecret);
+    console.log(typeof secret.liquidatorSecret);
     console.log(secretArray);
     const keypair = Keypair.fromSecretKey(secretArray);
     
