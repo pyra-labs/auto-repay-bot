@@ -1,3 +1,5 @@
+import express from 'express';
+import { json, Request, Response } from 'express';
 import dotenv from "dotenv";
 import { getKeypairFromEnvironment } from "@solana-developers/helpers";
 import { Connection, Keypair } from "@solana/web3.js";
@@ -44,6 +46,14 @@ async function fetchAWSSecretManagerService() {
 }
 
 async function main(useAWS: boolean) {
+    // Initialize endpoint
+    const app = express();
+    const port = process.env.PORT || 3000;
+    app.use(json());
+    app.get('/', (req: Request, res: Response) => {
+        res.status(200).json({ status: 'OK' });
+    });
+
     // Initialize connnection
     const RPC_URL = process.env.RPC_URL;
     if (!RPC_URL) throw new Error("RPC_URL is not set");

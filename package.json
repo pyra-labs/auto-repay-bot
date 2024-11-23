@@ -30,10 +30,14 @@
     "@solana/web3.js": "1.92.3",
     "@types/node": "^22.9.0",
     "bignumber.js": "^9.1.2",
+    "express": "^4.21.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2"
   },
   "resolutions": {
     "@solana/web3.js": "1.92.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0"
   }
 }
