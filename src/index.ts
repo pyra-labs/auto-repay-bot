@@ -33,6 +33,7 @@ async function fetchAWSSecretManagerService() {
     } catch (error) {
         throw new Error(`Failed to get secret key from AWS: ${error}`);
     }
+    
     const secretString = await response.SecretString;
     if (!secretString) throw new Error("Secret string is not set");
     const secret = JSON.parse(secretString);
