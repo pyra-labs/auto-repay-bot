@@ -36,10 +36,7 @@ async function fetchAWSSecretManagerService() {
     const secretString = await response.SecretString;
     if (!secretString) throw new Error("Secret string is not set");
     const secret = JSON.parse(secretString);
-    const secretArray = Uint8Array.from(secret.liquidatorSecret);
-    console.log(secret.liquidatorSecret);
-    console.log(typeof secret.liquidatorSecret);
-    console.log(secretArray);
+    const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
     const keypair = Keypair.fromSecretKey(secretArray);
     
     return keypair;
