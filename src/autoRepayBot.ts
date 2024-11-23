@@ -130,6 +130,9 @@ export class AutoRepayBot {
                     console.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                 }
             }
+
+            const waitDelay = 5_000;
+            await new Promise(resolve => setTimeout(resolve, waitDelay));
         }
     }
 
