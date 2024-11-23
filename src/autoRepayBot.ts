@@ -102,7 +102,12 @@ export class AutoRepayBot {
     }
 
     async run(): Promise<void> {
-        await this.initialize();
+        try {
+            await this.initialize();
+        } catch (error) {
+            console.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
+            return;
+        }
 
         while (true) {
             const vaults = await this.getAllVaults();
