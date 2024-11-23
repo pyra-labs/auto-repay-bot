@@ -12,6 +12,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const express_2 = require("express");
 const dotenv_1 = __importDefault(require("dotenv"));
 const helpers_1 = require("@solana-developers/helpers");
 const web3_js_1 = require("@solana/web3.js");
@@ -41,17 +43,27 @@ function fetchAWSSecretManagerService() {
         catch (error) {
             throw new Error(`Failed to get secret key from AWS: ${error}`);
         }
-        const secret = yield response.SecretString;
-        console.log(secret);
-        if (!secret)
+        const secretString = yield response.SecretString;
+        if (!secretString)
             throw new Error("Secret string is not set");
-        // const keypair = Keypair.fromSecretKey(secret);
-        const keypair = web3_js_1.Keypair.generate();
+        const secret = JSON.parse(secretString);
+        const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
+        const keypair = web3_js_1.Keypair.fromSecretKey(secretArray);
         return keypair;
     });
 }
 function main(useAWS) {
     return __awaiter(this, void 0, void 0, function* () {
+        // Initialize endpoint
+        const app = (0, express_1.default)();
+        const port = process.env.PORT || 3000;
+        app.use((0, express_2.json)());
+        app.get('/', (req, res) => {
+            res.status(200).json({ status: 'OK' });
+        });
+        app.listen(port, () => {
+            console.log(`Server running on port ${port}`);
+        });
         // Initialize connnection
         const RPC_URL = process.env.RPC_URL;
         if (!RPC_URL)

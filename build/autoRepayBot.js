@@ -79,9 +79,16 @@ class AutoRepayBot {
     }
     run() {
         return __awaiter(this, void 0, void 0, function* () {
-            yield this.initialize();
+            try {
+                yield this.initialize();
+            }
+            catch (error) {
+                console.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
+                return;
+            }
             while (true) {
                 const vaults = yield this.getAllVaults();
+                console.log(`Checking ${vaults.length} vaults...`);
                 for (const vault of vaults) {
                     const vaultAddress = vault.publicKey;
                     const owner = vault.account.owner;
@@ -99,6 +106,8 @@ class AutoRepayBot {
                         console.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                     }
                 }
+                const waitDelay = 5000;
+                yield new Promise(resolve => setTimeout(resolve, waitDelay));
             }
         });
     }

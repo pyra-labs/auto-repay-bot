@@ -111,11 +111,11 @@ export class AutoRepayBot {
 
         while (true) {
             const vaults = await this.getAllVaults();
+            console.log(`Checking ${vaults.length} vaults...`);
 
             for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
                 const owner = vault.account.owner;
-
                 try {
                     const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
                     await driftUser.initialize();
