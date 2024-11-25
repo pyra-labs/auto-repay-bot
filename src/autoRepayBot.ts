@@ -111,7 +111,8 @@ export class AutoRepayBot {
 
         while (true) {
             const vaults = await this.getAllVaults();
-            console.log(`Checking ${vaults.length} vaults...`);
+            const now = new Date();
+            console.log(`[${now.toISOString()}] Checking ${vaults.length} vaults...`);
 
             for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
@@ -131,7 +132,7 @@ export class AutoRepayBot {
                 }
             }
 
-            const waitDelay = 5_000;
+            const waitDelay = 10_000;
             await new Promise(resolve => setTimeout(resolve, waitDelay));
         }
     }
