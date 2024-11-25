@@ -88,7 +88,8 @@ class AutoRepayBot {
             }
             while (true) {
                 const vaults = yield this.getAllVaults();
-                console.log(`Checking ${vaults.length} vaults...`);
+                const now = new Date();
+                console.log(`[${now.toISOString()}] Checking ${vaults.length} vaults...`);
                 for (const vault of vaults) {
                     const vaultAddress = vault.publicKey;
                     const owner = vault.account.owner;
@@ -106,7 +107,7 @@ class AutoRepayBot {
                         console.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                     }
                 }
-                const waitDelay = 5000;
+                const waitDelay = 10000;
                 yield new Promise(resolve => setTimeout(resolve, waitDelay));
             }
         });

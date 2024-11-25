@@ -32,7 +32,9 @@
     "bignumber.js": "^9.1.2",
     "express": "^4.21.1",
     "ts-node": "^10.9.2",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "winston": "^3.17.0"
   },
   "resolutions": {
     "@solana/web3.js": "1.92.3"

@@ -12,10 +12,12 @@ import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter.js";
 import BigNumber from "bignumber.js";
 import { DriftUser } from "./driftUser.js";
+import winston, { createLogger, Logger, transports } from "winston";
 
 export class AutoRepayBot {
     private isInitialized: boolean = false;
 
+    private logger: Logger;
     private connection: Connection;
     private wallet: Wallet;
     private program: Program<FundsProgram>;
@@ -47,6 +49,20 @@ export class AutoRepayBot {
         this.wallet = wallet;
         this.program = program;
         this.maxRetries = maxRetries;
+
+        this.logger = createLogger({
+            level: 'info',
+            format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+            transports: [
+                new transports.Console(),
+            ],
+            exceptionHandlers: [
+                new transports.Console(),
+            ],
+            rejectionHandlers: [
+                new transports.Console(),
+            ],
+        });
     }
 
     private async initialize(): Promise<void> {
@@ -105,14 +121,14 @@ export class AutoRepayBot {
         try {
             await this.initialize();
         } catch (error) {
-            console.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
+            this.logger.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
             return;
         }
 
         while (true) {
             const vaults = await this.getAllVaults();
             const now = new Date();
-            console.log(`[${now.toISOString()}] Checking ${vaults.length} vaults...`);
+            this.logger.info(`[${now.toISOString()}] Checking ${vaults.length} vaults...`);
 
             for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
@@ -128,11 +144,11 @@ export class AutoRepayBot {
                         this.attemptAutoRepay(vaultAddress, owner, driftUser);
                     };
                 } catch (error) {
-                    console.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
+                    this.logger.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                 }
             }
 
-            const waitDelay = 10_000;
+            const waitDelay = 30_000;
             await new Promise(resolve => setTimeout(resolve, waitDelay));
         }
     }
@@ -166,7 +182,7 @@ export class AutoRepayBot {
             try {
                 const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
                 if (usdcBalance.gte(ZERO)) {
-                    console.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
+                    this.logger.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
                     return;
                 }
 
@@ -176,15 +192,15 @@ export class AutoRepayBot {
                 const latestBlockhash = await this.connection.getLatestBlockhash();
                 await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
 
-                console.log(`Executed auto-repay for ${owner}, signature: ${signature}`);
+                this.logger.info(`Executed auto-repay for ${owner}, signature: ${signature}`);
                 return;
             } catch (error) {
-                console.log(`Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
+                this.logger.error(`Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
                 continue;
             }
         }
 
-        console.error(`Failed to execute auto-repay for ${owner}`);
+        this.logger.error(`Failed to execute auto-repay for ${owner}`);
     }
 
     private async executeAutoRepay (
