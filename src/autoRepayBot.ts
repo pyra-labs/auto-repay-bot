@@ -65,12 +65,15 @@ export class AutoRepayBot {
         const mailTransportInstance = new winston.transports.Stream({
             stream: new Writable({
                 write: (message: string) => {
-                    mailTransporter.sendMail({
-                        from: process.env.EMAIL_FROM,
-                        to: process.env.EMAIL_TO,
-                        subject: `AutoRepayBot Error`,
-                        text: message,
-                    })
+                    const admins = process.env.EMAIL_TO!.split(',');
+                    for (const admin of admins) {
+                        mailTransporter.sendMail({
+                            from: process.env.EMAIL_FROM,
+                            to: admin,
+                            subject: `AutoRepayBot Error`,
+                            text: message,
+                        });
+                    }
                     return true;
                 }
             }),
@@ -150,8 +153,6 @@ export class AutoRepayBot {
 
     async run(): Promise<void> {
         try {
-            this.logger.error("Test");
-            return;
             await this.initialize();
         } catch (error) {
             this.logger.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
