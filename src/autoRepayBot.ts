@@ -13,6 +13,8 @@ import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter.js";
 import BigNumber from "bignumber.js";
 import { DriftUser } from "./driftUser.js";
 import winston, { createLogger, Logger, transports } from "winston";
+import nodemailer from "nodemailer";
+import { Writable } from "stream";
 
 export class AutoRepayBot {
     private isInitialized: boolean = false;
@@ -50,17 +52,46 @@ export class AutoRepayBot {
         this.program = program;
         this.maxRetries = maxRetries;
 
+        const mailTransporter = nodemailer.createTransport({
+            host: process.env.EMAIL_HOST,
+            port: parseInt(process.env.EMAIL_PORT!),
+            secure: false,
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASSWORD,
+            },
+        });
+
+        const mailTransportInstance = new winston.transports.Stream({
+            stream: new Writable({
+                write: (message: string) => {
+                    mailTransporter.sendMail({
+                        from: process.env.EMAIL_FROM,
+                        to: process.env.EMAIL_TO,
+                        subject: `AutoRepayBot Error`,
+                        text: message,
+                    })
+                    return true;
+                }
+            }),
+            level: 'error',
+            format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+        });
+
         this.logger = createLogger({
             level: 'info',
             format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
             transports: [
                 new transports.Console(),
+                mailTransportInstance
             ],
             exceptionHandlers: [
                 new transports.Console(),
+                mailTransportInstance
             ],
             rejectionHandlers: [
                 new transports.Console(),
+                mailTransportInstance
             ],
         });
     }
@@ -119,6 +150,8 @@ export class AutoRepayBot {
 
     async run(): Promise<void> {
         try {
+            this.logger.error("Test");
+            return;
             await this.initialize();
         } catch (error) {
             this.logger.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
