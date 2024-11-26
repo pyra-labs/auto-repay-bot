@@ -170,7 +170,7 @@ export class AutoRepayBot {
                 try {
                     const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
                     await this.retryWithBackoff(
-                        driftUser.initialize,
+                        async () => driftUser.initialize(),
                         3,
                         1_000
                     );
