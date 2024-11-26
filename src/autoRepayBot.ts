@@ -169,7 +169,11 @@ export class AutoRepayBot {
                 const owner = vault.account.owner;
                 try {
                     const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
-                    await driftUser.initialize();
+                    await this.retryWithBackoff(
+                        driftUser.initialize,
+                        3,
+                        1_000
+                    );
 
                     const driftHealth = driftUser.getHealth();
                     const quartzHealth = this.getQuartzHealth(driftHealth);
@@ -188,8 +192,34 @@ export class AutoRepayBot {
     }
 
     private async getAllVaults(): Promise<ProgramAccount[]> {
-        const vaults = await this.program.account.vault.all();
-        return vaults;
+        return await this.retryWithBackoff(
+            async () => this.program.account.vault.all(),
+            3,
+            1_000
+        );
+    }
+
+    private async retryWithBackoff<T>(
+        fn: () => Promise<T>,
+        retries: number,
+        initialDelay: number
+    ): Promise<T> {
+        let lastError: any;
+        for (let i = 0; i < retries; i++) {
+            try {
+                return await fn();
+            } catch (error: any) {
+                lastError = error;
+                if (error?.message?.includes('503')) {
+                    const delay = initialDelay * Math.pow(2, i);
+                    this.logger.warn(`RPC node unavailable, retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+                throw error;
+            }
+        }
+        throw lastError;
     }
 
     private getQuartzHealth(driftHealth: number): number {

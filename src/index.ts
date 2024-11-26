@@ -65,7 +65,7 @@ async function main(useAWS: boolean) {
     // Initialize wallet
     const keypair = useAWS 
         ? await fetchAWSSecretManagerService() 
-        : await getKeypairFromEnvironment("SECRET_KEY");
+        : getKeypairFromEnvironment("SECRET_KEY");
     const wallet = new Wallet(keypair);
 
     // Initialize program
