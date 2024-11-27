@@ -1,6 +1,6 @@
-import { AMM_RESERVE_PRECISION, AMM_RESERVE_PRECISION_EXP, BN, calculateAssetWeight, calculateLiabilityWeight, calculateLiveOracleTwap, calculateMarketMarginRatio, calculateMarketOpenBidAsk, calculatePerpLiabilityValue, calculatePositionPNL, calculateUnrealizedAssetWeight, calculateUnsettledFundingPnl, calculateWorstCasePerpLiabilityValue, DriftClient, fetchUserAccountsUsingKeys, FIVE_MINUTE, getSignedTokenAmount, getStrictTokenValue, getTokenAmount, getWorstCaseTokenAmounts, isSpotPositionAvailable, isVariant, MARGIN_PRECISION, MarginCategory, ONE, OPEN_ORDER_MARGIN_REQUIREMENT, PerpPosition, PRICE_PRECISION, QUOTE_PRECISION, QUOTE_SPOT_MARKET_INDEX, SPOT_MARKET_WEIGHT_PRECISION, SpotBalanceType, SpotMarketAccount, StrictOraclePrice, UserAccount, UserStatus, ZERO } from "@drift-labs/sdk";
+import { AMM_RESERVE_PRECISION, AMM_RESERVE_PRECISION_EXP, BN, calculateAssetWeight, calculateLiabilityWeight, calculateLiveOracleTwap, calculateMarketMarginRatio, calculateMarketOpenBidAsk, calculatePerpLiabilityValue, calculatePositionPNL, calculateUnrealizedAssetWeight, calculateUnsettledFundingPnl, calculateWithdrawLimit, calculateWorstCasePerpLiabilityValue, DriftClient, fetchUserAccountsUsingKeys, FIVE_MINUTE, getSignedTokenAmount, getStrictTokenValue, getTokenAmount, getWorstCaseTokenAmounts, isSpotPositionAvailable, isVariant, MARGIN_PRECISION, MarginCategory, ONE, OPEN_ORDER_MARGIN_REQUIREMENT, PerpPosition, PRICE_PRECISION, QUOTE_PRECISION, QUOTE_SPOT_MARKET_INDEX, SPOT_MARKET_WEIGHT_PRECISION, SpotBalanceType, StrictOraclePrice, UserAccount, UserStatus, ZERO, TEN, divCeil, SpotMarketAccount } from "@drift-labs/sdk";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { getDriftUser } from "./utils/helpers.js";
+import { getDriftUser } from "../utils/helpers.js";
 
 export class DriftUser {
     private isInitialized: boolean = false;
@@ -78,6 +78,147 @@ export class DriftUser {
 			),
 			spotPosition.balanceType
 		);
+	}
+
+	public getWithdrawalLimit(marketIndex: number, reduceOnly?: boolean): BN {
+		const nowTs = new BN(Math.floor(Date.now() / 1000));
+		const spotMarket = this.driftClient.getSpotMarketAccount(marketIndex);
+
+		// eslint-disable-next-line prefer-const
+		let { borrowLimit, withdrawLimit } = calculateWithdrawLimit(
+			spotMarket!,
+			nowTs
+		);
+
+		const freeCollateral = this.getFreeCollateral();
+		const initialMarginRequirement = this.getMarginRequirement('Initial', undefined, false);
+		const oracleData = this.driftClient.getOracleDataForSpotMarket(marketIndex);
+		const precisionIncrease = TEN.pow(new BN(spotMarket!.decimals - 6));
+
+		const { canBypass, depositAmount: userDepositAmount } =
+			this.canBypassWithdrawLimits(marketIndex);
+		if (canBypass) {
+			withdrawLimit = BN.max(withdrawLimit, userDepositAmount);
+		}
+
+		const assetWeight = calculateAssetWeight(
+			userDepositAmount,
+			oracleData.price,
+			spotMarket!,
+			'Initial'
+		);
+
+		let amountWithdrawable;
+		if (assetWeight.eq(ZERO)) {
+			amountWithdrawable = userDepositAmount;
+		} else if (initialMarginRequirement.eq(ZERO)) {
+			amountWithdrawable = userDepositAmount;
+		} else {
+			amountWithdrawable = divCeil(
+				divCeil(freeCollateral.mul(MARGIN_PRECISION), assetWeight).mul(
+					PRICE_PRECISION
+				),
+				oracleData.price
+			).mul(precisionIncrease);
+		}
+
+		const maxWithdrawValue = BN.min(
+			BN.min(amountWithdrawable, userDepositAmount),
+			withdrawLimit.abs()
+		);
+
+		if (reduceOnly) {
+			return BN.max(maxWithdrawValue, ZERO);
+		} else {
+			const weightedAssetValue = this.getSpotMarketAssetValue(
+				'Initial',
+				marketIndex,
+				false
+			);
+
+			const freeCollatAfterWithdraw = userDepositAmount.gt(ZERO)
+				? freeCollateral.sub(weightedAssetValue)
+				: freeCollateral;
+
+			const maxLiabilityAllowed = freeCollatAfterWithdraw
+				.mul(MARGIN_PRECISION)
+				.div(new BN(spotMarket!.initialLiabilityWeight))
+				.mul(PRICE_PRECISION)
+				.div(oracleData.price)
+				.mul(precisionIncrease);
+
+			const maxBorrowValue = BN.min(
+				maxWithdrawValue.add(maxLiabilityAllowed),
+				borrowLimit.abs()
+			);
+
+			return BN.max(maxBorrowValue, ZERO);
+		}
+	}
+
+	private getFreeCollateral(marginCategory: MarginCategory = 'Initial'): BN {
+		const totalCollateral = this.getTotalCollateral(marginCategory, true);
+		const marginRequirement =
+			marginCategory === 'Initial'
+				? this.getMarginRequirement('Initial', undefined, false)
+				: this.getMaintenanceMarginRequirement();
+		const freeCollateral = totalCollateral.sub(marginRequirement);
+		return freeCollateral.gte(ZERO) ? freeCollateral : ZERO;
+	}
+
+	private canBypassWithdrawLimits(marketIndex: number): {
+		canBypass: boolean;
+		netDeposits: BN;
+		depositAmount: BN;
+		maxDepositAmount: BN;
+	} {
+		const spotMarket = this.driftClient.getSpotMarketAccount(marketIndex);
+		const maxDepositAmount = spotMarket!.withdrawGuardThreshold.div(new BN(10));
+		const position = this.userAccount!.spotPositions.find((position) => position.marketIndex === marketIndex);
+
+		const netDeposits = this.userAccount!.totalDeposits.sub(
+			this.userAccount!.totalWithdraws
+		);
+
+		if (!position) {
+			return {
+				canBypass: false,
+				maxDepositAmount,
+				depositAmount: ZERO,
+				netDeposits,
+			};
+		}
+
+		if (isVariant(position.balanceType, 'borrow')) {
+			return {
+				canBypass: false,
+				maxDepositAmount,
+				netDeposits,
+				depositAmount: ZERO,
+			};
+		}
+
+		const depositAmount = getTokenAmount(
+			position.scaledBalance,
+			spotMarket!,
+			SpotBalanceType.DEPOSIT
+		);
+
+		if (netDeposits.lt(ZERO)) {
+			return {
+				canBypass: false,
+				maxDepositAmount,
+				depositAmount,
+				netDeposits,
+			};
+		}
+
+		return {
+			canBypass: depositAmount.lt(maxDepositAmount),
+			maxDepositAmount,
+			netDeposits,
+			depositAmount,
+		};
 	}
 
     private isBeingLiquidated(): boolean {

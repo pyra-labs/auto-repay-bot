@@ -1,26 +1,29 @@
-import { BN, Program, ProgramAccount, Wallet } from "@coral-xyz/anchor";
-import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { AnchorProvider, BN, Idl, Program, ProgramAccount, setProvider, Wallet } from "@coral-xyz/anchor";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { DriftClient, ZERO } from "@drift-labs/sdk";
-import { FundsProgram } from "./idl/funds_program.js";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./config/constants.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID } from "./config/constants.js";
 import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
-import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter.js";
+import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
 import BigNumber from "bignumber.js";
-import { DriftUser } from "./driftUser.js";
+import { DriftUser } from "./models/driftUser.js";
 import { AppLogger } from "./utils/logger.js";
+import config from "./config/config.js";
+import quartzIdl from "./idl/funds_program.json";
+import { FundsProgram } from "./idl/funds_program";
+import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
 export class AutoRepayBot extends AppLogger {
-    private isInitialized: boolean = false;
+    private initPromise: Promise<void>;
 
     private connection: Connection;
-    private wallet: Wallet;
-    private program: Program<FundsProgram>;
-    private maxRetries: number;
+    private wallet: Wallet | undefined;
+    private program: Program<FundsProgram> | undefined;
     
     private quartzLookupTable: AddressLookupTableAccount | undefined;
     private walletUsdc: PublicKey | undefined;
@@ -38,25 +41,65 @@ export class AutoRepayBot extends AppLogger {
     private solUsdPriceFeedAccount: PublicKey | undefined;
     private usdcUsdPriceFeedAccount: PublicKey | undefined;
 
-    constructor(
-        connection: Connection,
-        wallet: Wallet,
-        program: Program<FundsProgram>,
-        maxRetries: number
-    ) {
+    constructor() {
         super("Auto-Repay Bot");
-        this.connection = connection;
-        this.wallet = wallet;
-        this.program = program;
-        this.maxRetries = maxRetries;
+
+        this.connection = new Connection(config.RPC_URL);
+        this.initPromise = this.initialize();
     }
 
     private async initialize(): Promise<void> {
+        await this.initWallet(),
+        await this.initProgram(),
+        await this.initATAs(),
+        await this.initIntegrations()
+    }
+
+    private async initWallet(): Promise<void> {
+        if (!config.USE_AWS) {
+            this.wallet = new Wallet(Keypair.fromSecretKey(config.WALLET_KEYPAIR));
+            return;
+        }
+
+        const client = new SecretsManagerClient({ region: config.AWS_REGION });
+
+        try {
+            const response = await client.send(
+                new GetSecretValueCommand({
+                    SecretId: config.AWS_SECRET_NAME,
+                    VersionStage: "AWSCURRENT",
+                })
+            );
+
+            const secretString = response.SecretString;
+            if (!secretString) throw new Error("Secret string is not set");
+
+            const secret = JSON.parse(secretString);
+            const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
+
+            this.wallet = new Wallet(Keypair.fromSecretKey(secretArray));
+        } catch (error) {
+            throw new Error(`Failed to get secret key from AWS: ${error}`);
+        }
+    }
+
+    private async initProgram(): Promise<void> {
+        await this.initPromise;
+        if (!this.wallet) throw new Error("Wallet is not initialized");
+
+        const provider = new AnchorProvider(this.connection, this.wallet, { commitment: "confirmed" });
+        setProvider(provider);
+        this.program = new Program(quartzIdl as Idl, QUARTZ_PROGRAM_ID, provider) as unknown as Program<FundsProgram>;
+
         const quartzLookupTable = await this.connection.getAddressLookupTable(QUARTZ_ADDRESS_TABLE).then((res) => res.value);
         if (!quartzLookupTable) throw Error("Address Lookup Table account not found");
         this.quartzLookupTable = quartzLookupTable;
+    }
 
-        // Initialize ATAs
+    private async initATAs(): Promise<void> {
+        await this.initPromise;
+        if (!this.wallet) throw new Error("Wallet is not initialized");
+
         this.walletUsdc = await getOrCreateAssociatedTokenAccount(
             this.connection,
             this.wallet.payer,
@@ -69,8 +112,13 @@ export class AutoRepayBot extends AppLogger {
             WSOL_MINT,
             this.wallet.publicKey
         ).then((account) => account.address);
+    }
 
-        // Initialize Drift
+    private async initIntegrations(): Promise<void> {
+        await this.initPromise;
+        if (!this.wallet) throw new Error("Wallet is not initialized");
+
+        // Drift
         this.driftClient = new DriftClient({
             connection: this.connection,
             wallet: this.wallet,
@@ -78,7 +126,7 @@ export class AutoRepayBot extends AppLogger {
         });
         await this.driftClient.subscribe();
 
-        // Initialize Marginfi
+        // MarginFi
         const flashLoanToken = "SOL";
         const marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), this.wallet, this.connection);
         const wSolBank = marginfiClient.getBankByTokenSymbol(flashLoanToken)?.address;
@@ -92,24 +140,17 @@ export class AutoRepayBot extends AppLogger {
             this.marginfiAccount = marginfiAccounts[0];
         }
 
-        // Initialize Pyth
+        // Pyth
         this.pythSolanaReceiver = new PythSolanaReceiver({ connection: this.connection, wallet: this.wallet });
         this.solUsdPriceFeedAccount = this.pythSolanaReceiver
             .getPriceFeedAccountAddress(0, "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d");
         this.usdcUsdPriceFeedAccount = this.pythSolanaReceiver
             .getPriceFeedAccountAddress(0, "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a");
-
-        this.isInitialized = true;
-        console.log(`Auto-Repay Bot initialized with address ${this.wallet.publicKey}`);
     }
 
     async run(): Promise<void> {
-        try {
-            await this.initialize();
-        } catch (error) {
-            this.logger.error(`Error initializing AutoRepayBot with address ${this.wallet.publicKey}: ${error}`);
-            return;
-        }
+        await this.initPromise;
+        this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet?.publicKey}`);
 
         while (true) {
             const vaults = await this.getAllVaults();
@@ -145,8 +186,12 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async getAllVaults(): Promise<ProgramAccount[]> {
+        if (!this.program) throw new Error("Program is not initialized");
+
         return await retryRPCWithBackoff(
-            async () => this.program.account.vault.all(),
+            async () => {
+                return await this.program!.account.vault.all();
+            },
             3,
             1_000,
             this.logger
@@ -173,7 +218,7 @@ export class AutoRepayBot extends AppLogger {
         owner: PublicKey, 
         driftUser: DriftUser
     ): Promise<void> {
-        for (let retry = 0; retry < this.maxRetries; retry++) {
+        for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
                 const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
                 if (usdcBalance.gte(ZERO)) {
@@ -203,7 +248,7 @@ export class AutoRepayBot extends AppLogger {
         owner: PublicKey,
         loanAmountBaseUnits: number
     ): Promise<string> {
-        if (!this.isInitialized) throw new Error("AutoRepayBot is not initialized");
+        if (!this.program || !this.wallet) throw new Error("AutoRepayBot is not initialized");
 
         const vaultWsol = getVaultSpl(vault, WSOL_MINT);
         const vaultUsdc = getVaultSpl(vault, USDC_MINT);
