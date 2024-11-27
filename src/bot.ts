@@ -4,8 +4,8 @@ import { DriftClient, ZERO } from "@drift-labs/sdk";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff } from "./utils/helpers.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY } from "./config/constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -14,7 +14,7 @@ import { DriftUser } from "./models/driftUser.js";
 import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
 import quartzIdl from "./idl/funds_program.json";
-import { FundsProgram } from "./idl/funds_program";
+import { FundsProgram } from "./idl/funds_program.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
@@ -145,7 +145,7 @@ export class AutoRepayBot extends AppLogger {
             .getPriceFeedAccountAddress(0, "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a");
     }
 
-    async run(): Promise<void> {
+    async start(): Promise<void> {
         await this.initPromise;
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet?.publicKey}`);
 
@@ -167,7 +167,7 @@ export class AutoRepayBot extends AppLogger {
                     );
 
                     const driftHealth = driftUser.getHealth();
-                    const quartzHealth = this.getQuartzHealth(driftHealth);
+                    const quartzHealth = getQuartzHealth(driftHealth);
 
                     if (quartzHealth == 0) {
                         this.attemptAutoRepay(vaultAddress, owner, driftUser);
@@ -177,8 +177,7 @@ export class AutoRepayBot extends AppLogger {
                 }
             }
 
-            const waitDelay = 30_000;
-            await new Promise(resolve => setTimeout(resolve, waitDelay));
+            await new Promise(resolve => setTimeout(resolve, LOOP_DELAY));
         }
     }
 
@@ -192,21 +191,6 @@ export class AutoRepayBot extends AppLogger {
             3,
             1_000,
             this.logger
-        );
-    }
-
-    private getQuartzHealth(driftHealth: number): number {
-        if (driftHealth <= 0) return 0;
-        if (driftHealth >= 100) return 100;
-
-        return Math.floor(
-            Math.min(
-                100,
-                Math.max(
-                    0,
-                    (driftHealth - QUARTZ_HEALTH_BUFFER_PERCENTAGE) / (1 - (QUARTZ_HEALTH_BUFFER_PERCENTAGE / 100))
-                )
-            )
         );
     }
 

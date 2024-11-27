@@ -21,7 +21,6 @@ const envSchema = z.object({
     USE_AWS: z.string().transform((str) => str === "true"),
     AWS_SECRET_NAME: z.string(),
     AWS_REGION: z.string(),
-    PORT: z.coerce.number().min(0),
     EMAIL_TO: z.string()
         .transform((str) => {
             try {

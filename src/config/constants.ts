@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 export const QUARTZ_PROGRAM_ID = new PublicKey("6JjHXLheGSNvvexgzMthEcgjkcirDrGduc3HAKB2P1v2");
 export const QUARTZ_ADDRESS_TABLE = new PublicKey("96BmeKKVGX3LKYSKo3FCEom1YpNY11kCnGscKq6ouxLx");
 
+export const LOOP_DELAY = 30_000;
 export const MAX_AUTO_REPAY_ATTEMPTS = 3;
 
 export const USER_ACCOUNT_SIZE = 8 + 32 + 1; // Discriminator + Pubkey + u8

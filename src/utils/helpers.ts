@@ -1,6 +1,6 @@
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { DRIFT_PROGRAM_ID, QUARTZ_PROGRAM_ID } from "../config/constants.js";
+import { DRIFT_PROGRAM_ID, QUARTZ_HEALTH_BUFFER_PERCENTAGE, QUARTZ_PROGRAM_ID } from "../config/constants.js";
 import { Logger } from "winston";
 
 export const getVault = (owner: PublicKey) => {
@@ -89,4 +89,19 @@ export const retryRPCWithBackoff = async <T>(
         }
     }
     throw lastError;
+}
+
+export const getQuartzHealth = (driftHealth: number): number => {
+    if (driftHealth <= 0) return 0;
+    if (driftHealth >= 100) return 100;
+
+    return Math.floor(
+        Math.min(
+            100,
+            Math.max(
+                0,
+                (driftHealth - QUARTZ_HEALTH_BUFFER_PERCENTAGE) / (1 - (QUARTZ_HEALTH_BUFFER_PERCENTAGE / 100))
+            )
+        )
+    );
 }

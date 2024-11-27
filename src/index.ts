@@ -1,4 +1,4 @@
-import { AutoRepayBot } from "./autoRepayBot.js";
+import { AutoRepayBot } from "./bot.js";
 
-const autoRepayBot = new AutoRepayBot();
-autoRepayBot.run();
+const bot = new AutoRepayBot();
+bot.start();
