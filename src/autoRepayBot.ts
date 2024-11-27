@@ -4,22 +4,19 @@ import { DriftClient, ZERO } from "@drift-labs/sdk";
 import { FundsProgram } from "./idl/funds_program.js";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault } from "./helpers.js";
-import { getDriftSpotMarketVault } from "./helpers.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE } from "./config/constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff } from "./utils/helpers.js";
+import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./jupiter.js";
 import BigNumber from "bignumber.js";
 import { DriftUser } from "./driftUser.js";
-import winston, { createLogger, Logger, transports } from "winston";
-import nodemailer from "nodemailer";
-import { Writable } from "stream";
+import { AppLogger } from "./utils/logger.js";
 
-export class AutoRepayBot {
+export class AutoRepayBot extends AppLogger {
     private isInitialized: boolean = false;
 
-    private logger: Logger;
     private connection: Connection;
     private wallet: Wallet;
     private program: Program<FundsProgram>;
@@ -47,56 +44,11 @@ export class AutoRepayBot {
         program: Program<FundsProgram>,
         maxRetries: number
     ) {
+        super("Auto-Repay Bot");
         this.connection = connection;
         this.wallet = wallet;
         this.program = program;
         this.maxRetries = maxRetries;
-
-        const mailTransporter = nodemailer.createTransport({
-            host: process.env.EMAIL_HOST,
-            port: parseInt(process.env.EMAIL_PORT!),
-            secure: false,
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASSWORD,
-            },
-        });
-
-        const mailTransportInstance = new winston.transports.Stream({
-            stream: new Writable({
-                write: (message: string) => {
-                    const admins = process.env.EMAIL_TO!.split(',');
-                    for (const admin of admins) {
-                        mailTransporter.sendMail({
-                            from: process.env.EMAIL_FROM,
-                            to: admin,
-                            subject: `AutoRepayBot Error`,
-                            text: message,
-                        });
-                    }
-                    return true;
-                }
-            }),
-            level: 'error',
-            format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-        });
-
-        this.logger = createLogger({
-            level: 'info',
-            format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-            transports: [
-                new transports.Console(),
-                mailTransportInstance
-            ],
-            exceptionHandlers: [
-                new transports.Console(),
-                mailTransportInstance
-            ],
-            rejectionHandlers: [
-                new transports.Console(),
-                mailTransportInstance
-            ],
-        });
     }
 
     private async initialize(): Promise<void> {
@@ -169,10 +121,11 @@ export class AutoRepayBot {
                 const owner = vault.account.owner;
                 try {
                     const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
-                    await this.retryWithBackoff(
+                    await retryRPCWithBackoff(
                         async () => driftUser.initialize(),
                         3,
-                        1_000
+                        1_000,
+                        this.logger
                     );
 
                     const driftHealth = driftUser.getHealth();
@@ -192,34 +145,12 @@ export class AutoRepayBot {
     }
 
     private async getAllVaults(): Promise<ProgramAccount[]> {
-        return await this.retryWithBackoff(
+        return await retryRPCWithBackoff(
             async () => this.program.account.vault.all(),
             3,
-            1_000
+            1_000,
+            this.logger
         );
-    }
-
-    private async retryWithBackoff<T>(
-        fn: () => Promise<T>,
-        retries: number,
-        initialDelay: number
-    ): Promise<T> {
-        let lastError: any;
-        for (let i = 0; i < retries; i++) {
-            try {
-                return await fn();
-            } catch (error: any) {
-                lastError = error;
-                if (error?.message?.includes('503')) {
-                    const delay = initialDelay * Math.pow(2, i);
-                    this.logger.warn(`RPC node unavailable, retrying in ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue;
-                }
-                throw error;
-            }
-        }
-        throw lastError;
     }
 
     private getQuartzHealth(driftHealth: number): number {

@@ -1,6 +1,7 @@
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { DRIFT_PROGRAM_ID, QUARTZ_PROGRAM_ID } from "./constants.js";
+import { DRIFT_PROGRAM_ID, QUARTZ_PROGRAM_ID } from "../config/constants.js";
+import { Logger } from "winston";
 
 export const getVault = (owner: PublicKey) => {
     const [vault] = PublicKey.findProgramAddressSync(
@@ -63,4 +64,29 @@ export const toRemainingAccount = (
     isSigner: boolean
 ) => {
     return { pubkey, isWritable, isSigner }
+}
+
+export const retryRPCWithBackoff = async <T>(
+    fn: () => Promise<T>,
+    retries: number,
+    initialDelay: number,
+    logger?: Logger
+): Promise<T> => {
+    let lastError: any;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            if (error?.message?.includes('503')) {
+                const delay = initialDelay * Math.pow(2, i);
+                if (logger) logger.warn(`RPC node unavailable, retrying in ${delay}ms...`);
+                
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw lastError;
 }

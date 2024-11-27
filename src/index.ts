@@ -1,23 +1,22 @@
 import express from 'express';
 import { json, Request, Response } from 'express';
-import dotenv from "dotenv";
-import { getKeypairFromEnvironment } from "@solana-developers/helpers";
 import { Connection, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Idl, Program, setProvider, Wallet } from "@coral-xyz/anchor";
 import quartzIdl from "./idl/funds_program.json";
 import { FundsProgram } from "./idl/funds_program";
-import { QUARTZ_PROGRAM_ID } from "./constants.js";
+import { QUARTZ_PROGRAM_ID } from "./config/constants.js";
 import { AutoRepayBot } from "./autoRepayBot.js";
 import {
     SecretsManagerClient,
     GetSecretValueCommand,
 } from "@aws-sdk/client-secrets-manager";
+import config from './config/config.js';
 
 async function fetchAWSSecretManagerService() {
-    const secret_name = process.env.AWS_SECRET_NAME;
+    const secret_name = config.AWS_SECRET_NAME;
     if (!secret_name) throw new Error("AWS_SECRET_NAME is not set");
 
-    const region = process.env.AWS_REGION;
+    const region = config.AWS_REGION;
     if (!region) throw new Error("AWS_REGION is not set");
 
     const client = new SecretsManagerClient({
@@ -45,10 +44,10 @@ async function fetchAWSSecretManagerService() {
     return keypair;
 }
 
-async function main(useAWS: boolean) {
+async function main() {
     // Initialize endpoint
     const app = express();
-    const port = process.env.PORT || 3000;
+    const port = config.PORT;
     app.use(json());
     app.get('/', (req: Request, res: Response) => {
         res.status(200).json({ status: 'OK' });
@@ -58,14 +57,14 @@ async function main(useAWS: boolean) {
     });
 
     // Initialize connnection
-    const RPC_URL = process.env.RPC_URL;
+    const RPC_URL = config.RPC_URL;
     if (!RPC_URL) throw new Error("RPC_URL is not set");
     const connection = new Connection(RPC_URL);
 
     // Initialize wallet
-    const keypair = useAWS 
+    const keypair = (config.USE_AWS) 
         ? await fetchAWSSecretManagerService() 
-        : getKeypairFromEnvironment("SECRET_KEY");
+        : Keypair.fromSecretKey(config.WALLET_KEYPAIR);
     const wallet = new Wallet(keypair);
 
     // Initialize program
@@ -79,6 +78,4 @@ async function main(useAWS: boolean) {
     autoRepayBot.run();
 }
 
-dotenv.config();
-const useAWS = (process.env.USE_AWS === "true");
-main(useAWS);
+main();
