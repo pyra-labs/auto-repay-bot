@@ -84,7 +84,6 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async initProgram(): Promise<void> {
-        await this.initPromise;
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
         const provider = new AnchorProvider(this.connection, this.wallet, { commitment: "confirmed" });
@@ -97,7 +96,6 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async initATAs(): Promise<void> {
-        await this.initPromise;
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
         this.walletUsdc = await getOrCreateAssociatedTokenAccount(
@@ -115,7 +113,6 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async initIntegrations(): Promise<void> {
-        await this.initPromise;
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
         // Drift

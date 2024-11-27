@@ -6,7 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "dev": "NODE_ENV=development tsx src/index.ts",
-    "start": "tsc -p tsconfig.json && node build/index.js"
+    "start": "tsc -p tsconfig.json && node build/index.js",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "repository": {
     "type": "git",
@@ -27,7 +29,7 @@
     "@pythnetwork/pyth-solana-receiver": "^0.8.2",
     "@solana/spl-token": "0.3.11",
     "@solana/web3.js": "1.92.3",
-    "@types/node": "^22.9.0",
+    "@types/node": "^22.10.0",
     "bignumber.js": "^9.1.2",
     "express": "^4.21.1",
     "nodemailer": "^6.9.16",
