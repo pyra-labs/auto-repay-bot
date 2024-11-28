@@ -57,9 +57,12 @@ export class AutoRepayBot extends AppLogger {
 
     private async initWallet(): Promise<void> {
         if (!config.USE_AWS) {
+            if (!config.WALLET_KEYPAIR) throw new Error("Wallet keypair is not set");
             this.wallet = new Wallet(Keypair.fromSecretKey(config.WALLET_KEYPAIR));
             return;
         }
+
+        if (!config.AWS_REGION || !config.AWS_SECRET_NAME) throw new Error("AWS credentials are not set");
 
         const client = new SecretsManagerClient({ region: config.AWS_REGION });
 

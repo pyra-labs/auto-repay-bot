@@ -16,11 +16,14 @@ const envSchema = z.object({
                 throw new Error("Invalid keypair format: must be a JSON array of numbers");
             }
         })
-        .refine((bytes) => bytes.length === 64, {message: "Keypair must be 64 bytes long"}),
+        .nullable()
+        .refine((bytes) => bytes === null || bytes.length === 64, 
+            {message: "Keypair must be 64 bytes long"}
+        ),
     RPC_URL: z.string().url(),
     USE_AWS: z.string().transform((str) => str === "true"),
-    AWS_SECRET_NAME: z.string(),
-    AWS_REGION: z.string(),
+    AWS_SECRET_NAME: z.string().nullable(),
+    AWS_REGION: z.string().nullable(),
     EMAIL_TO: z.string()
         .transform((str) => {
             try {

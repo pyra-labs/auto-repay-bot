@@ -30,18 +30,33 @@ This bot wraps these instructions around a MarginFi flash loan. See executeAutoR
 As is, this bot can be run on your own machine or by using AWS. To use AWS, you will need to use AWS's Secret Management Service for the private key and should have a .env file similar to this:
 
 ```
-RPC_URL = https://api.mainnet-beta.solana.com 
-USE_AWS = true
-AWS_SECRET_NAME = autoRepayCredentials
-AWS_REGION = eu-north-1
+WALLET_KEYPAIR=
+RPC_URL=https://api.mainnet-beta.solana.com 
+USE_AWS=true
+AWS_SECRET_NAME=secret
+AWS_REGION=eu-north-1
+EMAIL_TO=iarla@quartzpay.io,diego@quartzpay.io
+EMAIL_FROM=diego@quartzpay.io
+EMAIL_HOST=your-email-client.com
+EMAIL_PORT=123
+EMAIL_USER=000000000@your-client-username.com
+EMAIL_PASSWORD=0000000000
 ```
 
 You can also run this bot on your own machine, in which case you will need to provide the secret key in a Uint8 byte array format, similar to:
 
 ```
-RPC_URL = https://api.mainnet-beta.solana.com 
-USE_AWS = false
-SECRET_KEY = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+WALLET_KEYPAIR=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+RPC_URL=https://api.mainnet-beta.solana.com 
+USE_AWS=false
+AWS_SECRET_NAME=
+AWS_REGION=
+EMAIL_TO=iarla@quartzpay.io,diego@quartzpay.io
+EMAIL_FROM=diego@quartzpay.io
+EMAIL_HOST=your-email-client.com
+EMAIL_PORT=123
+EMAIL_USER=000000000@your-client-username.com
+EMAIL_PASSWORD=0000000000
 ```
 
-In either case, you can run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that.
+The EMAIL_* variables are for error notifications through SMTP. In either case, you can run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that.
