@@ -5,7 +5,10 @@ dotenv.config();
 
 const envSchema = z.object({
     WALLET_KEYPAIR: z.string()
+        .optional()
+        .default("")
         .transform((str) => {
+            if (!str.trim()) return null;
             try {
                 const numbers = JSON.parse(str);
                 if (!Array.isArray(numbers) || !numbers.every((n) => typeof n === 'number')) {
@@ -16,7 +19,6 @@ const envSchema = z.object({
                 throw new Error("Invalid keypair format: must be a JSON array of numbers");
             }
         })
-        .nullable()
         .refine((bytes) => bytes === null || bytes.length === 64, 
             {message: "Keypair must be 64 bytes long"}
         ),
