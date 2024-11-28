@@ -13,8 +13,8 @@ import BigNumber from "bignumber.js";
 import { DriftUser } from "./models/driftUser.js";
 import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
-import quartzIdl from "./idl/funds_program.json";
-import { FundsProgram } from "./idl/funds_program.js";
+import quartzIdl from "./idl/quartz.json";
+import { Quartz } from "./types/quartz.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
@@ -23,7 +23,7 @@ export class AutoRepayBot extends AppLogger {
 
     private connection: Connection;
     private wallet: Wallet | undefined;
-    private program: Program<FundsProgram> | undefined;
+    private program: Program<Quartz> | undefined;
     
     private quartzLookupTable: AddressLookupTableAccount | undefined;
     private walletUsdc: PublicKey | undefined;
@@ -88,7 +88,7 @@ export class AutoRepayBot extends AppLogger {
 
         const provider = new AnchorProvider(this.connection, this.wallet, { commitment: "confirmed" });
         setProvider(provider);
-        this.program = new Program(quartzIdl as Idl, QUARTZ_PROGRAM_ID, provider) as unknown as Program<FundsProgram>;
+        this.program = new Program(quartzIdl as Idl, QUARTZ_PROGRAM_ID, provider) as unknown as Program<Quartz>;
 
         const quartzLookupTable = await this.connection.getAddressLookupTable(QUARTZ_ADDRESS_TABLE).then((res) => res.value);
         if (!quartzLookupTable) throw Error("Address Lookup Table account not found");

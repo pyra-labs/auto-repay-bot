@@ -1,6 +1,6 @@
-export type FundsProgram = {
-  "version": "0.1.20",
-  "name": "funds_program",
+export type Quartz = {
+  "version": "0.1.21",
+  "name": "quartz",
   "instructions": [
     {
       "name": "initUser",
@@ -54,12 +54,12 @@ export type FundsProgram = {
         },
         {
           "name": "driftUser",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
           "name": "driftUserStats",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
@@ -645,9 +645,9 @@ export type FundsProgram = {
   ]
 };
 
-export const IDL: FundsProgram = {
-  "version": "0.1.20",
-  "name": "funds_program",
+export const IDL: Quartz = {
+  "version": "0.1.21",
+  "name": "quartz",
   "instructions": [
     {
       "name": "initUser",
@@ -701,12 +701,12 @@ export const IDL: FundsProgram = {
         },
         {
           "name": "driftUser",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
           "name": "driftUserStats",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {

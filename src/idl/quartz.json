@@ -1,6 +1,6 @@
 {
-  "version": "0.1.20",
-  "name": "funds_program",
+  "version": "0.1.21",
+  "name": "quartz",
   "instructions": [
     {
       "name": "initUser",
@@ -54,12 +54,12 @@
         },
         {
           "name": "driftUser",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
           "name": "driftUserStats",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
