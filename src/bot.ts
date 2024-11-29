@@ -151,12 +151,14 @@ export class AutoRepayBot extends AppLogger {
     async start(): Promise<void> {
         await this.initPromise;
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet?.publicKey}`);
+        
+        // Setup heartbeat logs
+        setInterval(() => {
+            this.logger.info(`[${new Date().toISOString()}] Heartbeat | Bot address: ${this.wallet?.publicKey}`);
+        }, 1000 * 60 * 60 * 24); // Every 24 hours
 
         while (true) {
             const vaults = await this.getAllVaults();
-            const now = new Date();
-            this.logger.info(`[${now.toISOString()}] Checking ${vaults.length} vaults...`);
-
             for (const vault of vaults) {
                 const vaultAddress = vault.publicKey;
                 const owner = vault.account.owner;
@@ -188,9 +190,7 @@ export class AutoRepayBot extends AppLogger {
         if (!this.program) throw new Error("Program is not initialized");
 
         return await retryRPCWithBackoff(
-            async () => {
-                return await this.program!.account.vault.all();
-            },
+            async () => this.program!.account.vault.all(),
             3,
             1_000,
             this.logger
