@@ -1,6 +1,6 @@
 import { AnchorProvider, BN, Idl, Program, ProgramAccount, setProvider, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { DriftClient, ZERO } from "@drift-labs/sdk";
+import { DriftClient, fetchUserAccountsUsingKeys, UserAccount, ZERO } from "@drift-labs/sdk";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -152,34 +152,34 @@ export class AutoRepayBot extends AppLogger {
         await this.initPromise;
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet?.publicKey}`);
         
-        // Setup heartbeat logs
         setInterval(() => {
             this.logger.info(`[${new Date().toISOString()}] Heartbeat | Bot address: ${this.wallet?.publicKey}`);
         }, 1000 * 60 * 60 * 24); // Every 24 hours
 
         while (true) {
             const vaults = await this.getAllVaults();
-            for (const vault of vaults) {
-                const vaultAddress = vault.publicKey;
-                const owner = vault.account.owner;
-                try {
-                    const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!);
-                    await retryRPCWithBackoff(
-                        async () => driftUser.initialize(),
-                        3,
-                        1_000,
-                        this.logger
-                    );
-
+            try {
+                const driftUsers = await retryRPCWithBackoff(
+                    async () => this.fetchDriftUsers(vaults),
+                    3,
+                    1_000,
+                    this.logger
+                );
+                
+                for (let i = 0; i < vaults.length; i++) {
+                    const vaultAddress = vaults[i].publicKey;
+                    const owner = vaults[i].account.owner;
+                    
+                    const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!, driftUsers[i]);
                     const driftHealth = driftUser.getHealth();
                     const quartzHealth = getQuartzHealth(driftHealth);
 
                     if (quartzHealth == 0) {
                         this.attemptAutoRepay(vaultAddress, owner, driftUser);
                     };
-                } catch (error) {
-                    this.logger.error(`Error finding Drift User for ${vault.account.owner}: ${error}`);
                 }
+            } catch (error) {
+                this.logger.error(`Error fetching Drift health: ${error}`);
             }
 
             await new Promise(resolve => setTimeout(resolve, LOOP_DELAY));
@@ -195,6 +195,21 @@ export class AutoRepayBot extends AppLogger {
             1_000,
             this.logger
         );
+    }
+
+    private async fetchDriftUsers(vaults: ProgramAccount[]): Promise<UserAccount[]> {
+        const driftUsers = await fetchUserAccountsUsingKeys(
+            this.connection, 
+            this.driftClient!.program, 
+            vaults.map((vault) => getDriftUser(vault.publicKey))
+        );
+        
+        const undefinedIndex = driftUsers.findIndex(user => !user);
+        if (undefinedIndex !== -1) {
+            throw new Error(`Failed to fetch drift user for vault ${vaults[undefinedIndex].publicKey.toString()}`);
+        }
+
+        return driftUsers as UserAccount[];
     }
 
     private async attemptAutoRepay(

@@ -13,14 +13,22 @@ export class DriftUser {
     constructor (
         authority: PublicKey,
         connection: Connection, 
-        driftClient: DriftClient
+        driftClient: DriftClient,
+		userAccount?: UserAccount
     ) {
         this.authority = authority;
         this.connection = connection;
         this.driftClient = driftClient;
+
+		if (userAccount) {
+			this.userAccount = userAccount;
+			this.isInitialized = true;
+		}
     }
 
     public async initialize(): Promise<void> {
+		if (this.isInitialized) return;
+		
         const [ userAccount ] = await fetchUserAccountsUsingKeys(
             this.connection, 
             this.driftClient.program, 
