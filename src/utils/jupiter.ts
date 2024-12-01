@@ -4,10 +4,11 @@ import { QuoteResponse } from '@jup-ag/api';
 export async function getJupiterSwapQuote(
     inputMint: PublicKey, 
     outputMint: PublicKey, 
-    amount: number
+    amount: number,
+    slippageBps: number
 ) {
     const quoteEndpoint = 
-        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=50&swapMode=ExactOut&onlyDirectRoutes=true`;
+        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=ExactOut&onlyDirectRoutes=true`;
     const quoteResponse: QuoteResponse = await (await fetch(quoteEndpoint)).json();
     return quoteResponse;
 }

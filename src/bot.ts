@@ -1,11 +1,11 @@
 import { AnchorProvider, BN, Idl, Program, ProgramAccount, setProvider, Wallet } from "@coral-xyz/anchor";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { DriftClient, fetchUserAccountsUsingKeys, OracleSource, UserAccount, ZERO } from "@drift-labs/sdk";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth } from "./utils/helpers.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE } from "./config/constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createPriorityFeeInstructions } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -254,15 +254,17 @@ export class AutoRepayBot extends AppLogger {
         owner: PublicKey,
         loanAmountBaseUnits: number
     ): Promise<string> {
-        if (!this.program || !this.wallet) throw new Error("AutoRepayBot is not initialized");
+        if (!this.program || !this.wallet || !this.walletWSol) throw new Error("AutoRepayBot is not initialized");
 
         const vaultWsol = getVaultSpl(vault, WSOL_MINT);
         const vaultUsdc = getVaultSpl(vault, USDC_MINT);
         const driftUser = getDriftUser(vault);
         const driftUserStats = getDriftUserStats(vault);
 
-        const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, loanAmountBaseUnits);
-        const preLoanBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol!).then(res => res.value.amount);
+        const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, loanAmountBaseUnits, JUPITER_SLIPPAGE_BPS);
+        const startingWSolBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol)
+            .then(res => Number(res.value.amount));
+        const startingLamportsBalancePromise = this.connection.getBalance(this.wallet.publicKey);
 
         const autoRepayDepositPromise = this.program.methods
             .autoRepayDeposit(DRIFT_MARKET_INDEX_USDC)
@@ -320,15 +322,32 @@ export class AutoRepayBot extends AppLogger {
             ])
             .instruction();
 
-        const [preLoanBalance, jupiterQuote] = await Promise.all([preLoanBalancePromise, jupiterQuotePromise]);
+        const [
+            startingLamportsBalance, 
+            startingWSolBalance, 
+            jupiterQuote
+        ] = await Promise.all([startingLamportsBalancePromise, startingWSolBalancePromise, jupiterQuotePromise]);
         const jupiterSwapPromise = getJupiterSwapIx(this.wallet.publicKey, this.connection, jupiterQuote);
 
-        const amountLamports = Number(jupiterQuote.inAmount);
-        const amountLamportsWithSlippage = Math.floor(amountLamports * (1.01));
-        const walletWsolBalance = Number(preLoanBalance) + amountLamportsWithSlippage;
+        // Calculate balance amounts and wrap any wSOL needed
+        const requiredSol = Math.round(
+            Number(jupiterQuote.inAmount) * (1 + (JUPITER_SLIPPAGE_BPS / 10000))
+        );
+        const wrappableSol = startingLamportsBalance - MIN_LAMPORTS_BALANCE;
+        const lamportsToBorrow = Math.max(0, requiredSol - wrappableSol - startingWSolBalance);
+        const lamportsToWrap = Math.max(0, requiredSol - lamportsToBorrow - startingWSolBalance);
+
+        const oix_wrapSol: TransactionInstruction[] = [];
+        if (lamportsToWrap > 0) {
+            oix_wrapSol.push(SystemProgram.transfer({
+                fromPubkey: this.wallet.publicKey,
+                toPubkey: this.walletWSol,
+                lamports: lamportsToWrap
+            }));
+        }
 
         const autoRepayStartPromise = this.program.methods
-            .autoRepayStart(new BN(walletWsolBalance))
+            .autoRepayStart(new BN(startingWSolBalance + lamportsToWrap))
             .accounts({
                 caller: this.wallet.publicKey,
                 callerWithdrawSpl: this.walletWSol,
@@ -351,20 +370,50 @@ export class AutoRepayBot extends AppLogger {
         ] = await Promise.all([autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
-        const amountSolUi = new BigNumber(amountLamportsWithSlippage).div(LAMPORTS_PER_SOL);
-        const { flashloanTx } = await this.marginfiAccount!.makeLoopTx(
-            amountSolUi,
-            amountSolUi,
-            this.wSolBank!,
-            this.wSolBank!,
-            [ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw],
-            [this.quartzLookupTable!, ...jupiterLookupTables],
-            0.002,
-            false
+        const tx = await this.buildAutoRepayTx(
+            lamportsToBorrow,
+            [...oix_wrapSol, ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw], 
+            [this.quartzLookupTable!, ...jupiterLookupTables]
         );
-
-        const signedTx = await this.wallet.signTransaction(flashloanTx);
+        
+        const signedTx = await this.wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         return signature;
+    }
+
+    private async buildAutoRepayTx(
+        lamportsLoan: number,
+        instructions: TransactionInstruction[],
+        lookupTables: AddressLookupTableAccount[]
+    ): Promise<VersionedTransaction> {
+        if (!this.wallet || !this.walletWSol) throw new Error("AutoRepayBot is not initialized");
+
+        if (lamportsLoan > 0) {
+            const amountSolUi = new BigNumber(lamportsLoan).div(LAMPORTS_PER_SOL);
+            const loop = await this.marginfiAccount!.makeLoopTx(
+                amountSolUi,
+                amountSolUi,
+                this.wSolBank!,
+                this.wSolBank!,
+                instructions,
+                lookupTables,
+                0.002,
+                false
+            );
+            return loop.flashloanTx;
+        }
+
+        // If no loan required, build regular tx
+        const computeBudget = 200_000;
+        const ix_priority = await createPriorityFeeInstructions(computeBudget);
+        instructions.unshift(...ix_priority);
+
+        const latestBlockhash = await this.connection.getLatestBlockhash();
+        const messageV0 = new TransactionMessage({
+            payerKey: this.wallet.publicKey,
+            recentBlockhash: latestBlockhash.blockhash,
+            instructions: instructions,
+        }).compileToV0Message();
+        return new VersionedTransaction(messageV0);
     }
 }

@@ -1,5 +1,5 @@
 import { BN } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, ComputeBudgetProgram, PublicKey, TransactionInstruction, Transaction, Keypair } from "@solana/web3.js";
 import { DRIFT_PROGRAM_ID, QUARTZ_HEALTH_BUFFER_PERCENTAGE, QUARTZ_PROGRAM_ID } from "../config/constants.js";
 import { Logger } from "winston";
 
@@ -104,4 +104,14 @@ export const getQuartzHealth = (driftHealth: number): number => {
             )
         )
     );
+}
+
+export const createPriorityFeeInstructions = async (computeBudget: number) => {
+    const computeLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: computeBudget,
+    });
+    const computePriceIx = ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: await 1_000_000 // TODO: Implement fetching priority fee
+    });
+    return [computeLimitIx, computePriceIx];
 }
