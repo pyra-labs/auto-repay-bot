@@ -1,10 +1,10 @@
 import { AnchorProvider, BN, Idl, Program, ProgramAccount, setProvider, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { DriftClient, fetchUserAccountsUsingKeys, UserAccount, ZERO } from "@drift-labs/sdk";
+import { DriftClient, fetchUserAccountsUsingKeys, OracleSource, UserAccount, ZERO } from "@drift-labs/sdk";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY } from "./config/constants.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS } from "./config/constants.js";
 import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
@@ -123,6 +123,13 @@ export class AutoRepayBot extends AppLogger {
             connection: this.connection,
             wallet: this.wallet,
             env: 'mainnet-beta',
+            userStats: false,
+            perpMarketIndexes: [],
+            spotMarketIndexes: SUPPORTED_DRIFT_MARKETS,
+            accountSubscription: {
+                type: 'websocket',
+                commitment: "confirmed"
+            }
         });
         await this.driftClient.subscribe();
 
