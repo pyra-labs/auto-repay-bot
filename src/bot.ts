@@ -4,8 +4,8 @@ import { DriftClient, fetchUserAccountsUsingKeys, OracleSource, UserAccount, ZER
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createPriorityFeeInstructions } from "./utils/helpers.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, DRIFT_SOL_LIABILITY_WEIGHT } from "./config/constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createPriorityFeeInstructions, calculateRepayAmount } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -182,7 +182,23 @@ export class AutoRepayBot extends AppLogger {
                     const quartzHealth = getQuartzHealth(driftHealth);
 
                     if (quartzHealth == 0) {
-                        this.attemptAutoRepay(vaultAddress, owner, driftUser);
+                        const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
+                        if (usdcBalance.gte(ZERO)) {
+                            this.logger.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
+                            continue;
+                        }
+
+                        const loanAmount = Math.abs(usdcBalance.toNumber());
+                        const repayAmount = calculateRepayAmount(
+                            GOAL_HEALTH,
+                            loanAmount,
+                            driftUser.getTokenAmount(DRIFT_MARKET_INDEX_SOL).toNumber(),
+                            DRIFT_SOL_LIABILITY_WEIGHT
+                        );
+
+                        // Note, because the value is in USDC, not further calculations are required for USDC loans.
+                        // If the loan is another asset, repayAmount will need to be converted from its value into the actual amount.
+                        this.attemptAutoRepay(vaultAddress, owner, repayAmount);
                     };
                 }
             } catch (error) {
@@ -222,18 +238,11 @@ export class AutoRepayBot extends AppLogger {
     private async attemptAutoRepay(
         vaultAddress: PublicKey, 
         owner: PublicKey, 
-        driftUser: DriftUser
+        repayAmount: number
     ): Promise<void> {
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
-                const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
-                if (usdcBalance.gte(ZERO)) {
-                    this.logger.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
-                    return;
-                }
-
-                const loanAmount = Math.abs(usdcBalance.toNumber());
-                const signature = await this.executeAutoRepay(vaultAddress, owner, loanAmount);
+                const signature = await this.executeAutoRepay(vaultAddress, owner, repayAmount);
 
                 const latestBlockhash = await this.connection.getLatestBlockhash();
                 await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
@@ -252,7 +261,7 @@ export class AutoRepayBot extends AppLogger {
     private async executeAutoRepay (
         vault: PublicKey,
         owner: PublicKey,
-        loanAmountBaseUnits: number
+        repayAmount: number
     ): Promise<string> {
         if (!this.program || !this.wallet || !this.walletWSol) throw new Error("AutoRepayBot is not initialized");
 
@@ -261,7 +270,7 @@ export class AutoRepayBot extends AppLogger {
         const driftUser = getDriftUser(vault);
         const driftUserStats = getDriftUserStats(vault);
 
-        const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, loanAmountBaseUnits, JUPITER_SLIPPAGE_BPS);
+        const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, repayAmount, JUPITER_SLIPPAGE_BPS);
         const startingWSolBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol)
             .then(res => Number(res.value.amount));
         const startingLamportsBalancePromise = this.connection.getBalance(this.wallet.publicKey);

@@ -6,6 +6,7 @@ export const QUARTZ_ADDRESS_TABLE = new PublicKey("96BmeKKVGX3LKYSKo3FCEom1YpNY1
 export const LOOP_DELAY = 30_000;
 export const MAX_AUTO_REPAY_ATTEMPTS = 3;
 export const JUPITER_SLIPPAGE_BPS = 50;
+export const GOAL_HEALTH = 0.2;
 
 export const USER_ACCOUNT_SIZE = 8 + 32 + 1; // Discriminator + Pubkey + u8
 export const QUARTZ_HEALTH_BUFFER_PERCENTAGE = 10;
@@ -20,6 +21,8 @@ export const DRIFT_SPOT_MARKET_SOL = new PublicKey("3x85u7SWkmmr7YQGYhtjARgxwegT
 export const DRIFT_SPOT_MARKET_USDC = new PublicKey("6gMq3mRCKf8aP3ttTyYhuijVZ2LGi14oDsBbkgubfLB3");
 export const DRIFT_ORACLE_1 = new PublicKey("BAtFj4kQttZRVep3UZS2aZRDixkGYgWsbqTBVDbnSsPF");
 export const DRIFT_ORACLE_2 = new PublicKey("En8hkHLkRe9d9DraYmBTrus518BvmVH448YcvmrFM6Ce");
+
+export const DRIFT_SOL_LIABILITY_WEIGHT = 1.1;
 
 export const DRIFT_MARKET_INDEX_USDC = 0;
 export const DRIFT_MARKET_INDEX_SOL = 1;

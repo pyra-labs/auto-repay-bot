@@ -115,3 +115,16 @@ export const createPriorityFeeInstructions = async (computeBudget: number) => {
     });
     return [computeLimitIx, computePriceIx];
 }
+
+export const calculateRepayAmount = (
+    goalHealth: number,
+    loanValue: number, 
+    collateralValue: number,
+    liabilityWeight: number
+) => {
+    return (
+        (liabilityWeight * loanValue) + (goalHealth * collateralValue) - 1
+    ) / (
+        goalHealth + liabilityWeight
+    )
+}
