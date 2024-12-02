@@ -160,8 +160,8 @@ export class AutoRepayBot extends AppLogger {
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet?.publicKey}`);
         
         setInterval(() => {
-            this.logger.info(`[${new Date().toISOString()}] Heartbeat | Bot address: ${this.wallet?.publicKey}`);
-        }, 1000 * 60 * 60 * 24); // Every 24 hours
+            this.logger.info(`Heartbeat | Bot address: ${this.wallet?.publicKey}`);
+        }, 1000 * 60 * 60 * 24);
 
         while (true) {
             const vaults = await this.getAllVaults();
@@ -184,7 +184,7 @@ export class AutoRepayBot extends AppLogger {
                     if (quartzHealth == 0) {
                         const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
                         if (usdcBalance.gte(ZERO)) {
-                            this.logger.error("Attempted to execute auto-repay on low health account but found no outstanding loans");
+                            this.logger.error(`[${this.wallet?.publicKey}] Attempted to execute auto-repay on account ${owner} but found no outstanding loans`);
                             continue;
                         }
 
@@ -202,7 +202,7 @@ export class AutoRepayBot extends AppLogger {
                     };
                 }
             } catch (error) {
-                this.logger.error(`Error fetching Drift health: ${error}`);
+                this.logger.error(`[${this.wallet?.publicKey}] Error fetching Drift health: ${error}`);
             }
 
             await new Promise(resolve => setTimeout(resolve, LOOP_DELAY));
@@ -229,7 +229,7 @@ export class AutoRepayBot extends AppLogger {
         
         const undefinedIndex = driftUsers.findIndex(user => !user);
         if (undefinedIndex !== -1) {
-            throw new Error(`Failed to fetch drift user for vault ${vaults[undefinedIndex].publicKey.toString()}`);
+            throw new Error(`[${this.wallet?.publicKey}] Failed to fetch drift user for vault ${vaults[undefinedIndex].publicKey.toString()}`);
         }
 
         return driftUsers as UserAccount[];
@@ -250,12 +250,12 @@ export class AutoRepayBot extends AppLogger {
                 this.logger.info(`Executed auto-repay for ${owner}, signature: ${signature}`);
                 return;
             } catch (error) {
-                this.logger.error(`Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
+                this.logger.error(`[${this.wallet?.publicKey}] Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
                 continue;
             }
         }
 
-        this.logger.error(`Failed to execute auto-repay for ${owner}`);
+        this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${owner}`);
     }
 
     private async executeAutoRepay (
