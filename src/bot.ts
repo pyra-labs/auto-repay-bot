@@ -104,20 +104,18 @@ export class AutoRepayBot extends AppLogger {
         this.walletWSol = await getAssociatedTokenAddress(WSOL_MINT, this.wallet!.publicKey);
         this.walletUsdc = await getAssociatedTokenAddress(USDC_MINT, this.wallet!.publicKey);
 
-        const oix_createWSol = await createAtaIfNeeded(this.connection, this.walletWSol, this.wallet!.publicKey, WSOL_MINT);
-        const oix_createUsdc = await createAtaIfNeeded(this.connection, this.walletUsdc, this.wallet!.publicKey, USDC_MINT);
-        const instructions = [...oix_createWSol, ...oix_createUsdc];
-        if (instructions.length == 0) return;
+        const oix_createUsdcATA = await createAtaIfNeeded(this.connection, this.walletUsdc, this.wallet!.publicKey, USDC_MINT);
+        if (oix_createUsdcATA.length == 0) return;
 
         const computeBudget = 200_000;
         const ix_priority = await createPriorityFeeInstructions(computeBudget);
-        instructions.unshift(...ix_priority);
+        oix_createUsdcATA.unshift(...ix_priority);
 
         const latestBlockhash = await this.connection.getLatestBlockhash();
         const messageV0 = new TransactionMessage({
             payerKey: this.wallet!.publicKey,
             recentBlockhash: latestBlockhash.blockhash,
-            instructions: instructions,
+            instructions: oix_createUsdcATA,
         }).compileToV0Message();
         const tx = new VersionedTransaction(messageV0);
         const signedTx = await this.wallet!.signTransaction(tx);
