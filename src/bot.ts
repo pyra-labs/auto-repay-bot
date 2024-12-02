@@ -1,11 +1,11 @@
 import { AnchorProvider, BN, Idl, Program, ProgramAccount, setProvider, Wallet } from "@coral-xyz/anchor";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { DriftClient, fetchUserAccountsUsingKeys, OracleSource, UserAccount, ZERO } from "@drift-labs/sdk";
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createAtaIfNeeded } from "./utils/helpers.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createAtaIfNeeded, retryWithBackoff } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -101,18 +101,28 @@ export class AutoRepayBot extends AppLogger {
     private async initATAs(): Promise<void> {
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
-        this.walletUsdc = await getOrCreateAssociatedTokenAccount(
-            this.connection,
-            this.wallet.payer,
-            USDC_MINT,
-            this.wallet.publicKey
-        ).then((account) => account.address);
-        this.walletWSol = await getOrCreateAssociatedTokenAccount(
-            this.connection,
-            this.wallet.payer,
-            WSOL_MINT,
-            this.wallet.publicKey
-        ).then((account) => account.address);
+        this.walletWSol = await getAssociatedTokenAddress(WSOL_MINT, this.wallet!.publicKey);
+        this.walletUsdc = await getAssociatedTokenAddress(USDC_MINT, this.wallet!.publicKey);
+
+        const oix_createWSol = await createAtaIfNeeded(this.connection, this.walletWSol, this.wallet!.publicKey, WSOL_MINT);
+        const oix_createUsdc = await createAtaIfNeeded(this.connection, this.walletUsdc, this.wallet!.publicKey, USDC_MINT);
+        const instructions = [...oix_createWSol, ...oix_createUsdc];
+        if (instructions.length == 0) return;
+
+        // const computeBudget = 200_000;
+        // const ix_priority = await createPriorityFeeInstructions(connection, instructions, computeBudget);
+        // instructions.unshift(...ix_priority);
+
+        const latestBlockhash = await this.connection.getLatestBlockhash();
+        const messageV0 = new TransactionMessage({
+            payerKey: this.wallet!.publicKey,
+            recentBlockhash: latestBlockhash.blockhash,
+            instructions: instructions,
+        }).compileToV0Message();
+        const tx = new VersionedTransaction(messageV0);
+        const signedTx = await this.wallet!.signTransaction(tx);
+        const signature = await this.connection.sendRawTransaction(signedTx.serialize());
+        this.logger.info(`Created associated token accounts, signature: ${signature}`);
     }
 
     private async initIntegrations(): Promise<void> {

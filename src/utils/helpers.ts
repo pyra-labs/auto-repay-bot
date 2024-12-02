@@ -92,6 +92,27 @@ export const retryRPCWithBackoff = async <T>(
     throw lastError;
 }
 
+export const retryWithBackoff = async <T>(
+    fn: () => Promise<T>,
+    retries: number,
+    initialDelay: number,
+    logger?: Logger
+): Promise<T> => {
+    let lastError: any;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            const delay = initialDelay * Math.pow(2, i);
+
+            if (logger) logger.warn(`Error, retrying in ${delay}ms... ${error}`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    throw lastError;
+}
+
 export const getQuartzHealth = (driftHealth: number): number => {
     if (driftHealth <= 0) return 0;
     if (driftHealth >= 100) return 100;
