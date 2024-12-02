@@ -1,7 +1,8 @@
 import { BN } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { DRIFT_PROGRAM_ID, QUARTZ_HEALTH_BUFFER_PERCENTAGE, QUARTZ_PROGRAM_ID } from "../config/constants.js";
 import { Logger } from "winston";
+import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 
 export const getVault = (owner: PublicKey) => {
     const [vault] = PublicKey.findProgramAddressSync(
@@ -104,4 +105,25 @@ export const getQuartzHealth = (driftHealth: number): number => {
             )
         )
     );
+}
+
+export async function createAtaIfNeeded(
+    connection: Connection,
+    ata: PublicKey,
+    authority: PublicKey,
+    mint: PublicKey
+) {
+    const oix_createAta: TransactionInstruction[] = [];
+    const ataInfo = await connection.getAccountInfo(ata);
+    if (ataInfo === null) {
+        oix_createAta.push(
+            createAssociatedTokenAccountInstruction(
+                authority,
+                ata,
+                authority,
+                mint
+            )
+        );
+    }
+    return oix_createAta;
 }

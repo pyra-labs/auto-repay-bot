@@ -5,7 +5,7 @@ import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth } from "./utils/helpers.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createAtaIfNeeded } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -254,7 +254,9 @@ export class AutoRepayBot extends AppLogger {
         owner: PublicKey,
         loanAmountBaseUnits: number
     ): Promise<string> {
-        if (!this.program || !this.wallet) throw new Error("AutoRepayBot is not initialized");
+        if (!this.program || !this.wallet || !this.walletWSol) throw new Error("AutoRepayBot is not initialized");
+
+        const oix_createWSolAtaPromise = createAtaIfNeeded(this.connection, this.walletWSol, this.wallet.publicKey, WSOL_MINT);
 
         const vaultWsol = getVaultSpl(vault, WSOL_MINT);
         const vaultUsdc = getVaultSpl(vault, USDC_MINT);
@@ -344,11 +346,12 @@ export class AutoRepayBot extends AppLogger {
             .instruction();
 
         const [
+            oix_createWSolAta,
             ix_autoRepayStart, 
             jupiterSwap, 
             ix_autoRepayDeposit, 
             ix_autoRepayWithdraw
-        ] = await Promise.all([autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
+        ] = await Promise.all([oix_createWSolAtaPromise, autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
         const amountSolUi = new BigNumber(amountLamportsWithSlippage).div(LAMPORTS_PER_SOL);
@@ -357,7 +360,7 @@ export class AutoRepayBot extends AppLogger {
             amountSolUi,
             this.wSolBank!,
             this.wSolBank!,
-            [ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw],
+            [...oix_createWSolAta, ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw],
             [this.quartzLookupTable!, ...jupiterLookupTables],
             0.002,
             false
