@@ -118,16 +118,29 @@ export const createPriorityFeeInstructions = async (computeBudget: number) => {
 }
 
 export const calculateRepayAmount = (
-    goalHealth: number,
+    goalHealth: number, // In decimal format
     loanValue: number, 
-    collateralValue: number,
-    liabilityWeight: number
+    currentWeightedCollateral: number,
+    repayCollateralWeight: number, // In decimal format
+    quartzHealthBuffer: number, // In decimal format
 ) => {
-    return (
-        (liabilityWeight * loanValue) + (goalHealth * collateralValue) - 1
-    ) / (
-        goalHealth + liabilityWeight
-    )
+    // New Quartz health after repayment is given as:
+    // 
+    //                                      loanValue - repayAmount                     
+    //             1 - ----------------------------------------------------------------- - quartzHealthBuffer
+    //                 currentWeightedCollateral - (repayAmount * repayCollateralWeight)
+    //   health = -------------------------------------------------------------------------------------------
+    //                                               1 - quartzHealthBuffer                                  
+    //
+    // The following is an algebraicly simplified expression of the above formula, in terms of repayAmount
+
+    return Math.round(
+        (
+            loanValue - currentWeightedCollateral * (1 - quartzHealthBuffer) * (1 - goalHealth)
+        ) / (
+            1 - repayCollateralWeight * (1 - quartzHealthBuffer) * (1 - goalHealth)
+        )
+    );
 }
 
 export async function createAtaIfNeeded(
@@ -149,4 +162,13 @@ export async function createAtaIfNeeded(
         );
     }
     return oix_createAta;
+}
+
+export async function getTokenAccountBalance(connection: Connection, tokenAccount: PublicKey) {
+    try {
+        const balance = await connection.getTokenAccountBalance(tokenAccount);
+        return Number(balance.value.amount);
+    } catch (error) {
+        return 0;
+    }
 }

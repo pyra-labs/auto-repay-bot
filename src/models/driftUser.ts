@@ -237,11 +237,13 @@ export class DriftUser {
 		);
 	}
 
-    private getTotalCollateral(
+    public getTotalCollateral(
 		marginCategory: MarginCategory = 'Initial',
 		strict = false,
 		includeOpenOrders = true
 	): BN {
+		if (!this.isInitialized) throw new Error("DriftUser not initialized");
+
 		return this.getSpotMarketAssetValue(
 			marginCategory,
 			undefined,
@@ -863,7 +865,9 @@ export class DriftUser {
 		return clonedPosition;
 	}
 
-    private getMaintenanceMarginRequirement(): BN {
+    public getMaintenanceMarginRequirement(): BN {
+		if (!this.isInitialized) throw new Error("Drift user not initialized");
+		
 		// if user being liq'd, can continue to be liq'd until total collateral above the margin requirement plus buffer
 		let liquidationBuffer: BN | undefined = undefined;
 		if (this.isBeingLiquidated()) {

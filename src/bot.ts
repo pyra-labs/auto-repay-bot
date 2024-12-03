@@ -4,8 +4,8 @@ import { DriftClient, fetchUserAccountsUsingKeys, OracleSource, UserAccount, ZER
 import { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, DRIFT_SOL_LIABILITY_WEIGHT } from "./config/constants.js";
-import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createPriorityFeeInstructions, calculateRepayAmount, createAtaIfNeeded } from "./utils/helpers.js";
+import { DRIFT_MARKET_INDEX_SOL, DRIFT_MARKET_INDEX_USDC, DRIFT_SPOT_MARKET_USDC, DRIFT_SPOT_MARKET_SOL, DRIFT_ORACLE_1, DRIFT_ORACLE_2, DRIFT_PROGRAM_ID, USDC_MINT, WSOL_MINT, DRIFT_SIGNER, QUARTZ_ADDRESS_TABLE, USER_ACCOUNT_SIZE, QUARTZ_HEALTH_BUFFER_PERCENTAGE, MAX_AUTO_REPAY_ATTEMPTS, QUARTZ_PROGRAM_ID, LOOP_DELAY, SUPPORTED_DRIFT_MARKETS, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, DRIFT_SOL_COLLATERAL_WEIGHT } from "./config/constants.js";
+import { getDriftState, toRemainingAccount, getDriftUserStats, getDriftUser, getVaultSpl, getVault, retryRPCWithBackoff, getQuartzHealth, createPriorityFeeInstructions, calculateRepayAmount, createAtaIfNeeded, getTokenAccountBalance } from "./utils/helpers.js";
 import { getDriftSpotMarketVault } from "./utils/helpers.js";
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
 import { getJupiterSwapIx, getJupiterSwapQuote } from "./utils/jupiter.js";
@@ -17,6 +17,7 @@ import quartzIdl from "./idl/quartz.json";
 import { Quartz } from "./types/quartz.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes/index.js";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
@@ -190,22 +191,21 @@ export class AutoRepayBot extends AppLogger {
                     const quartzHealth = getQuartzHealth(driftHealth);
 
                     if (quartzHealth == 0) {
-                        const usdcBalance = driftUser.getTokenAmount(DRIFT_MARKET_INDEX_USDC);
-                        if (usdcBalance.gte(ZERO)) {
+                        const weightedCollateralValue = driftUser.getTotalCollateral('Maintenance').toNumber();
+                        const loanValue = driftUser.getMaintenanceMarginRequirement().toNumber();
+                        if (loanValue <= 0) {
                             this.logger.error(`[${this.wallet?.publicKey}] Attempted to execute auto-repay on account ${owner} but found no outstanding loans`);
                             continue;
                         }
 
-                        const loanAmount = Math.abs(usdcBalance.toNumber());
                         const repayAmount = calculateRepayAmount(
                             GOAL_HEALTH,
-                            loanAmount,
-                            driftUser.getTokenAmount(DRIFT_MARKET_INDEX_SOL).toNumber(),
-                            DRIFT_SOL_LIABILITY_WEIGHT
+                            loanValue,
+                            weightedCollateralValue,
+                            DRIFT_SOL_COLLATERAL_WEIGHT,
+                            QUARTZ_HEALTH_BUFFER_PERCENTAGE / 100
                         );
 
-                        // Note, because the value is in USDC, not further calculations are required for USDC loans.
-                        // If the loan is another asset, repayAmount will need to be converted from its value into the actual amount.
                         this.attemptAutoRepay(vaultAddress, owner, repayAmount);
                     };
                 }
@@ -258,7 +258,7 @@ export class AutoRepayBot extends AppLogger {
                 this.logger.info(`Executed auto-repay for ${owner}, signature: ${signature}`);
                 return;
             } catch (error) {
-                this.logger.error(`[${this.wallet?.publicKey}] Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
+                this.logger.warn(`[${this.wallet?.publicKey}] Auto-repay transaction failed for ${owner}, retrying... Error: ${error}`);
                 continue;
             }
         }
@@ -273,16 +273,13 @@ export class AutoRepayBot extends AppLogger {
     ): Promise<string> {
         if (!this.program || !this.wallet || !this.walletWSol) throw new Error("AutoRepayBot is not initialized");
 
-        const oix_createWSolAtaPromise = createAtaIfNeeded(this.connection, this.walletWSol, this.wallet.publicKey, WSOL_MINT);
-
         const vaultWsol = getVaultSpl(vault, WSOL_MINT);
         const vaultUsdc = getVaultSpl(vault, USDC_MINT);
         const driftUser = getDriftUser(vault);
         const driftUserStats = getDriftUserStats(vault);
 
         const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, repayAmount, JUPITER_SLIPPAGE_BPS);
-        const startingWSolBalancePromise = this.connection.getTokenAccountBalance(this.walletWSol)
-            .then(res => Number(res.value.amount));
+        const startingWSolBalancePromise = getTokenAccountBalance(this.connection, this.walletWSol);
         const startingLamportsBalancePromise = this.connection.getBalance(this.wallet.publicKey);
 
         const autoRepayDepositPromise = this.program.methods
@@ -352,9 +349,18 @@ export class AutoRepayBot extends AppLogger {
         const requiredSol = Math.round(
             Number(jupiterQuote.inAmount) * (1 + (JUPITER_SLIPPAGE_BPS / 10000))
         );
-        const wrappableSol = startingLamportsBalance - MIN_LAMPORTS_BALANCE;
+        const wrappableSol = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
         const lamportsToBorrow = Math.max(0, requiredSol - wrappableSol - startingWSolBalance);
         const lamportsToWrap = Math.max(0, requiredSol - lamportsToBorrow - startingWSolBalance);
+
+        if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
+            this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`);
+        }
+
+        let oix_createWSolAta: TransactionInstruction[] = [];
+        if (lamportsToBorrow <= 0) {
+            oix_createWSolAta = await createAtaIfNeeded(this.connection, this.walletWSol, this.wallet.publicKey, WSOL_MINT);
+        }
 
         const oix_wrapSol: TransactionInstruction[] = [];
         if (lamportsToWrap > 0) {
@@ -366,7 +372,7 @@ export class AutoRepayBot extends AppLogger {
         }
 
         const autoRepayStartPromise = this.program.methods
-            .autoRepayStart(new BN(startingWSolBalance + lamportsToWrap))
+            .autoRepayStart(new BN(startingWSolBalance + lamportsToWrap + lamportsToBorrow))
             .accounts({
                 caller: this.wallet.publicKey,
                 callerWithdrawSpl: this.walletWSol,
@@ -382,12 +388,11 @@ export class AutoRepayBot extends AppLogger {
             .instruction();
 
         const [
-            oix_createWSolAta,
             ix_autoRepayStart, 
             jupiterSwap, 
             ix_autoRepayDeposit, 
             ix_autoRepayWithdraw
-        ] = await Promise.all([oix_createWSolAtaPromise, autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
+        ] = await Promise.all([autoRepayStartPromise, jupiterSwapPromise, autoRepayDepositPromise, autoRepayWithdrawPromise]);
         const {ix_jupiterSwap, jupiterLookupTables} = jupiterSwap;
 
         const tx = await this.buildAutoRepayTx(
@@ -395,7 +400,7 @@ export class AutoRepayBot extends AppLogger {
             [...oix_createWSolAta, ...oix_wrapSol, ix_autoRepayStart, ix_jupiterSwap, ix_autoRepayDeposit, ix_autoRepayWithdraw], 
             [this.quartzLookupTable!, ...jupiterLookupTables]
         );
-        
+
         const signedTx = await this.wallet.signTransaction(tx);
         const signature = await this.connection.sendRawTransaction(signedTx.serialize());
         return signature;
