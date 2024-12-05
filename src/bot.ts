@@ -174,17 +174,28 @@ export class AutoRepayBot extends AppLogger {
 
         while (true) {
             const vaults = await this.getAllVaults();
+            let driftUsers: (UserAccount | undefined)[] = [];
             try {
-                const driftUsers = await retryRPCWithBackoff(
+                driftUsers = await retryRPCWithBackoff(
                     async () => this.fetchDriftUsers(vaults),
                     3,
                     1_000,
                     this.logger
                 );
+            } catch (error) {
+                this.logger.error(`[${this.wallet?.publicKey}] Error fetching drift users: ${error}`);
+                continue;
+            }
                 
-                for (let i = 0; i < vaults.length; i++) {
-                    const vaultAddress = vaults[i].publicKey;
-                    const owner = vaults[i].account.owner;
+            for (let i = 0; i < vaults.length; i++) {
+                const vaultAddress = vaults[i].publicKey;
+                const owner = vaults[i].account.owner;
+
+                try {
+                    if (!driftUsers[i]) {
+                        this.logger.warn(`[${this.wallet?.publicKey}] Failed to fetch drift user for vault ${vaults[i].publicKey.toString()}`);
+                        continue;
+                    }
                     
                     const driftUser = new DriftUser(vaultAddress, this.connection, this.driftClient!, driftUsers[i]);
                     const driftHealth = driftUser.getHealth();
@@ -208,10 +219,11 @@ export class AutoRepayBot extends AppLogger {
 
                         this.attemptAutoRepay(vaultAddress, owner, repayAmount);
                     };
+                } catch (error) {
+                    this.logger.error(`[${this.wallet?.publicKey}] Error processing user ${owner.toString()}: ${error}`);
                 }
-            } catch (error) {
-                this.logger.error(`[${this.wallet?.publicKey}] Error fetching Drift health: ${error}`);
             }
+            
 
             await new Promise(resolve => setTimeout(resolve, LOOP_DELAY));
         }
@@ -228,19 +240,14 @@ export class AutoRepayBot extends AppLogger {
         );
     }
 
-    private async fetchDriftUsers(vaults: ProgramAccount[]): Promise<UserAccount[]> {
-        const driftUsers = await fetchUserAccountsUsingKeys(
+    private async fetchDriftUsers(
+        vaults: ProgramAccount[]
+    ): Promise<(UserAccount | undefined)[]> {
+        return await fetchUserAccountsUsingKeys(
             this.connection, 
             this.driftClient!.program, 
             vaults.map((vault) => getDriftUser(vault.publicKey))
         );
-        
-        const undefinedIndex = driftUsers.findIndex(user => !user);
-        if (undefinedIndex !== -1) {
-            throw new Error(`[${this.wallet?.publicKey}] Failed to fetch drift user for vault ${vaults[undefinedIndex].publicKey.toString()}`);
-        }
-
-        return driftUsers as UserAccount[];
     }
 
     private async attemptAutoRepay(
