@@ -173,9 +173,11 @@ export class AutoRepayBot extends AppLogger {
         }, 1000 * 60 * 60 * 24);
 
         while (true) {
-            const vaults = await this.getAllVaults();
+            let vaults: ProgramAccount[] = [];
             let driftUsers: (UserAccount | undefined)[] = [];
+            
             try {
+                vaults = await this.getAllVaults();
                 driftUsers = await retryRPCWithBackoff(
                     async () => this.fetchDriftUsers(vaults),
                     3,
