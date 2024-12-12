@@ -9,9 +9,8 @@ import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { QuartzClient, USDC_MINT, WSOL_MINT } from "@quartz-labs/sdk";
+import { QuartzClient, Wallet, USDC_MINT, WSOL_MINT } from "@quartz-labs/sdk";
 import type { QuartzUser } from "@quartz-labs/sdk";
-import { Wallet } from "@coral-xyz/anchor";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;

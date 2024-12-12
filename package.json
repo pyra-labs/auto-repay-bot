@@ -24,10 +24,9 @@
   "homepage": "https://github.com/quartz-labs/auto-repay-bot#readme",
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.696.0",
-    "@coral-xyz/anchor": "0.29.0",
     "@jup-ag/api": "^6.0.29",
     "@mrgnlabs/marginfi-client-v2": "^4.0.0",
-    "@quartz-labs/sdk": "^0.0.14",
+    "@quartz-labs/sdk": "^0.0.15",
     "@solana/spl-token": "0.3.11",
     "@solana/web3.js": "1.95.8",
     "@types/node": "^22.10.0",
