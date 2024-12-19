@@ -16,7 +16,7 @@ export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
 
     private connection: Connection;
-    private wallet: Wallet | undefined;
+    private wallet: InstanceType<typeof Wallet> | undefined;
     private walletUsdc: PublicKey | undefined;
     private walletWSol: PublicKey | undefined;
 
@@ -162,7 +162,6 @@ export class AutoRepayBot extends AppLogger {
                 }
             }
             
-
             await new Promise(resolve => setTimeout(resolve, LOOP_DELAY));
         }
     }
@@ -187,7 +186,11 @@ export class AutoRepayBot extends AppLogger {
             }
         }
 
-        this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${user.pubkey.toBase58()}`);
+        const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
+        const refreshedHealth = refreshedUser?.getHealth();
+        if (refreshedHealth === undefined || refreshedHealth === 0) {
+            this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${user.pubkey.toBase58()}`);
+        }
     }
 
     private async executeAutoRepay (
