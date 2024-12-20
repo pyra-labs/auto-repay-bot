@@ -185,7 +185,9 @@ export class AutoRepayBot extends AppLogger {
                 this.logger.warn(
                     `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${error}`
                 );
-                await new Promise(resolve => setTimeout(resolve, 1_000));
+                
+                const delay = 1_000 * (retry + 1);
+                await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
 
