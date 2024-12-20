@@ -1,7 +1,7 @@
 import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
-import { getAssociatedTokenAddress } from "@solana/spl-token";
+import { createSyncNativeInstruction, getAssociatedTokenAddress } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, DRIFT_SOL_COLLATERAL_WEIGHT, MARGINFI_FLASH_LOAN_TOKEN } from "./config/constants.js";
 import { retryRPCWithBackoff, createPriorityFeeInstructions, createAtaIfNeeded, getTokenAccountBalance, getJupiterSwapQuote } from "./utils/helpers.js";
 import { BigNumber } from "bignumber.js";
@@ -9,14 +9,13 @@ import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { QuartzClient, Wallet, USDC_MINT, WSOL_MINT } from "@quartz-labs/sdk";
-import type { QuartzUser } from "@quartz-labs/sdk";
+import { QuartzClient, USDC_MINT, WSOL_MINT, type Wallet, getWallet, type QuartzUser } from "@quartz-labs/sdk";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
 
     private connection: Connection;
-    private wallet: InstanceType<typeof Wallet> | undefined;
+    private wallet: Wallet | undefined;
     private walletUsdc: PublicKey | undefined;
     private walletWSol: PublicKey | undefined;
 
@@ -40,7 +39,7 @@ export class AutoRepayBot extends AppLogger {
     private async initWallet(): Promise<void> {
         if (!config.USE_AWS) {
             if (!config.WALLET_KEYPAIR) throw new Error("Wallet keypair is not set");
-            this.wallet = new Wallet(Keypair.fromSecretKey(config.WALLET_KEYPAIR));
+            this.wallet = getWallet(Keypair.fromSecretKey(config.WALLET_KEYPAIR));
             return;
         }
 
@@ -62,7 +61,7 @@ export class AutoRepayBot extends AppLogger {
             const secret = JSON.parse(secretString);
             const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
 
-            this.wallet = new Wallet(Keypair.fromSecretKey(secretArray));
+            this.wallet = getWallet(Keypair.fromSecretKey(secretArray));
         } catch (error) {
             throw new Error(`Failed to get secret key from AWS: ${error}`);
         }
@@ -97,7 +96,7 @@ export class AutoRepayBot extends AppLogger {
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
         // Quartz
-        this.quartzClient = await QuartzClient.fetchClient(this.connection, this.wallet);
+        this.quartzClient = await QuartzClient.fetchClient(this.connection);
 
         // MarginFi
         const marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), this.wallet, this.connection);
@@ -146,7 +145,7 @@ export class AutoRepayBot extends AppLogger {
                 const user = users[i];
                 try {
                     if (user === null || user === undefined) {
-                        this.logger.warn(`[${this.wallet?.publicKey}] Failed to fetch Quartz user for ${owners[i]?.toBase58()}`);
+                        // this.logger.warn(`[${this.wallet?.publicKey}] Failed to fetch Quartz user for ${owners[i]?.toBase58()}`);
                         continue;
                     }
 
@@ -156,6 +155,7 @@ export class AutoRepayBot extends AppLogger {
                             DRIFT_SOL_COLLATERAL_WEIGHT
                         );
                         this.attemptAutoRepay(user, repayAmount);
+                        continue;
                     };
                 } catch (error) {
                     this.logger.error(`[${this.wallet?.publicKey}] Error processing user: ${error}`);
@@ -170,6 +170,7 @@ export class AutoRepayBot extends AppLogger {
         user: QuartzUser, 
         repayAmount: number
     ): Promise<void> {
+        let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
                 const signature = await this.executeAutoRepay(user, repayAmount);
@@ -180,16 +181,20 @@ export class AutoRepayBot extends AppLogger {
                 this.logger.info(`Executed auto-repay for ${user.pubkey.toBase58()}, signature: ${signature}`);
                 return;
             } catch (error) {
+                lastError = error as Error;
                 this.logger.warn(
                     `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${error}`
                 );
+                await new Promise(resolve => setTimeout(resolve, 1_000));
             }
         }
 
-        const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
-        const refreshedHealth = refreshedUser?.getHealth();
-        if (refreshedHealth === undefined || refreshedHealth === 0) {
-            this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${user.pubkey.toBase58()}`);
+        try {
+            const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
+            const refreshedHealth = refreshedUser?.getHealth();
+            if (refreshedHealth === undefined || refreshedHealth === 0) throw lastError;
+        } catch (error) {
+            this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${user.pubkey.toBase58()}. Error: ${error}`);
         }
     }
 
@@ -211,12 +216,13 @@ export class AutoRepayBot extends AppLogger {
         ] = await Promise.all([startingLamportsBalancePromise, startingWSolBalancePromise, jupiterQuotePromise]);
 
         // Calculate balance amounts and wrap any wSOL needed
-        const requiredSol = Math.round(
+        const requiredLamportsForRepay = Math.round(
             Number(jupiterQuote.inAmount) * (1 + (JUPITER_SLIPPAGE_BPS / 10000))
         );
-        const wrappableSol = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
-        const lamportsToBorrow = Math.max(0, requiredSol - wrappableSol - startingWSolBalance);
-        const lamportsToWrap = Math.max(0, requiredSol - lamportsToBorrow - startingWSolBalance);
+        const wrappableLamports = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
+        const amountExtraWSolRequired = Math.max(0, requiredLamportsForRepay - startingWSolBalance);
+        const lamportsToWrap = Math.min(amountExtraWSolRequired, wrappableLamports);
+        const lamportsToBorrow = Math.max(0, amountExtraWSolRequired - lamportsToWrap);
 
         let oix_createWSolAta: TransactionInstruction[] = [];
         if (lamportsToBorrow <= 0) {
@@ -225,15 +231,18 @@ export class AutoRepayBot extends AppLogger {
 
         const oix_wrapSol: TransactionInstruction[] = [];
         if (lamportsToWrap > 0) {
-            oix_wrapSol.push(SystemProgram.transfer({
-                fromPubkey: this.wallet.publicKey,
-                toPubkey: this.walletWSol,
-                lamports: lamportsToWrap
-            }));
+            oix_wrapSol.push(
+                SystemProgram.transfer({
+                    fromPubkey: this.wallet.publicKey,
+                    toPubkey: this.walletWSol,
+                    lamports: lamportsToWrap
+                }),
+                createSyncNativeInstruction(this.walletWSol)
+            );
         }
 
         if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
-            this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`);
+            // this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`); // TODO: uncomment
         }
 
         // Build instructions
@@ -246,9 +255,10 @@ export class AutoRepayBot extends AppLogger {
             jupiterQuote
         )
 
+        const instructions = [...oix_createWSolAta, ...oix_wrapSol, ...ixs_autoRepay];
         const tx = await this.buildAutoRepayTx(
             lamportsToBorrow,
-            [...oix_createWSolAta, ...oix_wrapSol, ...ixs_autoRepay], 
+            instructions, 
             lookupTables
         );
 
@@ -282,7 +292,7 @@ export class AutoRepayBot extends AppLogger {
         }
 
         // If no loan required, build regular tx
-        const computeBudget = 200_000;
+        const computeBudget = 700_000;
         const ix_priority = await createPriorityFeeInstructions(computeBudget);
         instructions.unshift(...ix_priority);
 
@@ -290,8 +300,8 @@ export class AutoRepayBot extends AppLogger {
         const messageV0 = new TransactionMessage({
             payerKey: this.wallet.publicKey,
             recentBlockhash: latestBlockhash.blockhash,
-            instructions: instructions,
-        }).compileToV0Message();
+            instructions: instructions
+        }).compileToV0Message(lookupTables);
         return new VersionedTransaction(messageV0);
     }
 }

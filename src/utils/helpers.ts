@@ -75,10 +75,15 @@ export async function createAtaIfNeeded(
 }
 
 export async function getTokenAccountBalance(connection: Connection, tokenAccount: PublicKey) {
-    try {
-        const balance = await connection.getTokenAccountBalance(tokenAccount);
-        return Number(balance.value.amount);
-    } catch {
-        return 0;
-    }
+    const account = await connection.getAccountInfo(tokenAccount);
+    if (account === null) return 0;
+    
+    return await retryRPCWithBackoff(
+        async () => {
+            const balance = await connection.getTokenAccountBalance(tokenAccount);
+            return Number(balance.value.amount);
+        },
+        3,
+        1_000
+    );
 }
