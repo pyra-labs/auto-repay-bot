@@ -9,7 +9,7 @@ import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { QuartzClient, USDC_MINT, WSOL_MINT, type Wallet, getWallet, type QuartzUser } from "@quartz-labs/sdk";
+import { QuartzClient, USDC_MINT, WSOL_MINT, type Wallet, getWallet, type QuartzUser, DRIFT_MARKET_INDEX_USDC, DRIFT_MARKET_INDEX_SOL } from "@quartz-labs/sdk";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
@@ -244,7 +244,7 @@ export class AutoRepayBot extends AppLogger {
         }
 
         if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
-            // this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`); // TODO: uncomment
+            this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`);
         }
 
         // Build instructions
@@ -252,7 +252,11 @@ export class AutoRepayBot extends AppLogger {
         const {ixs: ixs_autoRepay, lookupTables} = await user.makeCollateralRepayIxs(
             this.wallet.publicKey,
             this.walletUsdc,
+            USDC_MINT,
+            DRIFT_MARKET_INDEX_USDC,
             this.walletWSol,
+            WSOL_MINT,
+            DRIFT_MARKET_INDEX_SOL,
             startingBalance,
             jupiterQuote
         )
