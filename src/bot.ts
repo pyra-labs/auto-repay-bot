@@ -170,6 +170,11 @@ export class AutoRepayBot extends AppLogger {
         user: QuartzUser, 
         repayAmount: number
     ): Promise<void> {
+        if (await user.getTokenBalance(DRIFT_MARKET_INDEX_USDC) >= 0) {
+            this.logger.warn(`[${this.wallet?.publicKey}] Cannot execute auto-reapy for ${user.pubkey.toBase58()} as loan is in SOL`);
+            return;
+        }
+
         let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
