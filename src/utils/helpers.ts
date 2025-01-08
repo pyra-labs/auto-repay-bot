@@ -1,7 +1,8 @@
-import { type Connection, ComputeBudgetProgram, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import { type Connection, ComputeBudgetProgram, type PublicKey } from "@solana/web3.js";
 import type { Logger } from "winston";
-import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import type { QuoteResponse } from "@jup-ag/api";
+import { MarketIndex, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
+import type { PythResponse } from "../types/pyth.interface.js";
 
 export async function getJupiterSwapQuote(
     inputMint: PublicKey, 
@@ -53,27 +54,6 @@ export const createPriorityFeeInstructions = async (computeBudget: number) => {
     return [computeLimitIx, computePriceIx];
 }
 
-export async function createAtaIfNeeded(
-    connection: Connection,
-    ata: PublicKey,
-    authority: PublicKey,
-    mint: PublicKey
-) {
-    const oix_createAta: TransactionInstruction[] = [];
-    const ataInfo = await connection.getAccountInfo(ata);
-    if (ataInfo === null) {
-        oix_createAta.push(
-            createAssociatedTokenAccountInstruction(
-                authority,
-                ata,
-                authority,
-                mint
-            )
-        );
-    }
-    return oix_createAta;
-}
-
 export async function getTokenAccountBalance(connection: Connection, tokenAccount: PublicKey) {
     const account = await connection.getAccountInfo(tokenAccount);
     if (account === null) return 0;
@@ -86,4 +66,127 @@ export async function getTokenAccountBalance(connection: Connection, tokenAccoun
         3,
         1_000
     );
+}
+
+export async function getPrices(): Promise<Record<MarketIndex, number>> {
+    try {
+        return await getPricesPyth();
+    } catch {
+        try {
+            return await getPricesCoinGecko();
+        } catch {
+            throw new Error("Failed to fetch prices from main (Pyth) and backup (CoinGecko) sources");
+        }
+    }
+}
+
+async function getPricesPyth(): Promise<Record<MarketIndex, number>> {
+    const pythPriceFeedIdParams = MarketIndex.map(index => `ids%5B%5D=${TOKENS[index].pythPriceFeedId}`);
+    const endpoint = `https://hermes.pyth.network/v2/updates/price/latest?${pythPriceFeedIdParams.join("&")}`;
+    const reponse = await fetch(endpoint);
+    if (!reponse.ok) throw new Error("Failed to fetch prices");
+    const body = await reponse.json() as PythResponse;
+    const pricesData = body.parsed;
+
+    const prices = {} as Record<MarketIndex, number>;
+    for (const index of MarketIndex) {
+        prices[index] = 0;
+    }
+    
+    for (const priceData of pricesData) {
+        const marketIndex = MarketIndex.find(index => TOKENS[index].pythPriceFeedId.slice(2) === priceData.id);
+        if (marketIndex === undefined) continue;
+
+        const price = Number(priceData.price.price) * (10 ** priceData.price.expo);
+        prices[marketIndex] = price;
+    }
+
+    return prices;
+}
+
+async function getPricesCoinGecko(): Promise<Record<MarketIndex, number>> {
+    const coinGeckoIdParams = MarketIndex.map(index => TOKENS[index].coingeckoPriceId).join(",");
+    const endpoint = `https://api.coingecko.com/api/v3/simple/price?ids=${coinGeckoIdParams}&vs_currencies=usd`;
+    const response = await fetch(endpoint);
+    if (!response.ok) throw new Error("Failed to fetch prices");
+    const body = await response.json() as Record<string, { usd: number }>;
+    
+    const prices = {} as Record<MarketIndex, number>;
+    for (const index of MarketIndex) {
+        prices[index] = 0;
+    }
+
+    for (const id of Object.keys(body)) {
+        const marketIndex = MarketIndex.find(index => TOKENS[index].coingeckoPriceId === id);
+        if (marketIndex === undefined) continue;
+
+        const value = body[id];
+        if (value === undefined) continue;
+
+        prices[marketIndex] = value.usd;
+    }
+
+    return prices;
+}
+
+export function getLowestValue(values: Record<MarketIndex, number>): MarketIndex {
+    let lowestValue = Number.MAX_VALUE;
+    let lowestValueIndex: MarketIndex = MarketIndex[0];
+
+    for (const [marketIndex, value] of Object.entries(values)) {
+        const numericValue = value;
+        if (numericValue < lowestValue) {
+            lowestValue = numericValue;
+            lowestValueIndex = Number(marketIndex) as MarketIndex;
+        }
+    }
+    return lowestValueIndex;
+}
+
+export function getHighestValue(values: Record<MarketIndex, number>): MarketIndex {
+    let highestValue = Number.MIN_VALUE;
+    let highestValueIndex: MarketIndex = MarketIndex[0];
+
+    for (const [marketIndex, value] of Object.entries(values)) {
+        const numericValue = value;
+        if (numericValue > highestValue) {
+            highestValue = numericValue;
+            highestValueIndex = Number(marketIndex) as MarketIndex;
+        }
+    }
+    
+    return highestValueIndex;
+}
+
+export async function getRepayMarketIndices(user: QuartzUser) {
+    const balancesArray = await Promise.all(
+        MarketIndex.map(async index => ({
+            index,
+            balance: await user.getTokenBalance(index)
+        }))
+    );
+
+    const balances = balancesArray.reduce((acc, { index, balance }) => 
+        Object.assign(acc, { [index]: balance }
+    ), {} as Record<MarketIndex, BN>);
+
+    let lowestBalance: {index: MarketIndex, balance: BN} 
+        = { index: MarketIndex[0], balance: balances[MarketIndex[0]] };
+    let highestBalance: {index: MarketIndex, balance: BN} 
+        = { index: MarketIndex[0], balance: balances[MarketIndex[0]] };
+
+    for (const marketIndex of MarketIndex) {
+        const balance = balances[marketIndex];
+        if (balance.lt(lowestBalance.balance)) {
+            lowestBalance = { index: marketIndex, balance };
+        }
+        if (balance.gt(highestBalance.balance)) {
+            highestBalance = { index: marketIndex, balance };
+        }
+    }
+
+    return {
+        marketIndexLoan: lowestBalance.index,
+        marketIndexCollateral: highestBalance.index
+    };
 }

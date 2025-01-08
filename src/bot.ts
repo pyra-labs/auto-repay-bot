@@ -1,27 +1,25 @@
-import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair, type PublicKey, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
-import { createSyncNativeInstruction, getAssociatedTokenAddress } from "@solana/spl-token";
-import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, DRIFT_SOL_COLLATERAL_WEIGHT, MARGINFI_FLASH_LOAN_TOKEN } from "./config/constants.js";
-import { retryRPCWithBackoff, createPriorityFeeInstructions, createAtaIfNeeded, getTokenAccountBalance, getJupiterSwapQuote } from "./utils/helpers.js";
-import { BigNumber } from "bignumber.js";
+import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH } from "./config/constants.js";
+import { retryRPCWithBackoff, createPriorityFeeInstructions, getTokenAccountBalance, getJupiterSwapQuote, getLowestValue, getHighestValue, getPrices } from "./utils/helpers.js";
 import { AppLogger } from "./utils/logger.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { QuartzClient, USDC_MINT, WSOL_MINT, type Wallet, getWallet, type QuartzUser, DRIFT_MARKET_INDEX_USDC, DRIFT_MARKET_INDEX_SOL } from "@quartz-labs/sdk";
+import { getTokenProgram, MarketIndex, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, DummyWallet, WSOL_MINT, baseUnitToDecimal } from "@quartz-labs/sdk";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
 
     private connection: Connection;
-    private wallet: Wallet | undefined;
-    private walletUsdc: PublicKey | undefined;
-    private walletWSol: PublicKey | undefined;
+    private wallet: Keypair | undefined;
+    private splWallets = {} as Record<MarketIndex, PublicKey>;
 
     private quartzClient: QuartzClient | undefined;
+    private marginfiClient: MarginfiClient | undefined;
     private marginfiAccount: MarginfiAccountWrapper | undefined;
-    private wSolBank: PublicKey | undefined;
 
     constructor() {
         super("Auto-Repay Bot");
@@ -39,7 +37,7 @@ export class AutoRepayBot extends AppLogger {
     private async initWallet(): Promise<void> {
         if (!config.USE_AWS) {
             if (!config.WALLET_KEYPAIR) throw new Error("Wallet keypair is not set");
-            this.wallet = getWallet(Keypair.fromSecretKey(config.WALLET_KEYPAIR));
+            this.wallet = Keypair.fromSecretKey(config.WALLET_KEYPAIR);
             return;
         }
 
@@ -61,7 +59,7 @@ export class AutoRepayBot extends AppLogger {
             const secret = JSON.parse(secretString);
             const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
 
-            this.wallet = getWallet(Keypair.fromSecretKey(secretArray));
+            this.wallet = Keypair.fromSecretKey(secretArray);
         } catch (error) {
             throw new Error(`Failed to get secret key from AWS: ${error}`);
         }
@@ -70,43 +68,44 @@ export class AutoRepayBot extends AppLogger {
     private async initATAs(): Promise<void> {
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
-        this.walletWSol = await getAssociatedTokenAddress(WSOL_MINT, this.wallet.publicKey);
-        this.walletUsdc = await getAssociatedTokenAddress(USDC_MINT, this.wallet.publicKey);
+        const oix_createATAs = [];
+        for (const [marketIndex, token] of Object.entries(TOKENS)) {
+            const tokenProgram = await getTokenProgram(this.connection, token.mint);
+            const ata = await getAssociatedTokenAddress(token.mint, this.wallet.publicKey, false, tokenProgram);
 
-        const oix_createUsdcATA = await createAtaIfNeeded(this.connection, this.walletUsdc, this.wallet.publicKey, USDC_MINT);
-        if (oix_createUsdcATA.length === 0) return;
+            const oix_createAta = await makeCreateAtaIxIfNeeded(this.connection, ata, this.wallet.publicKey, token.mint, tokenProgram);
+            if (oix_createAta.length > 0) oix_createATAs.push(...oix_createAta);
+
+            this.splWallets[Number(marketIndex) as MarketIndex] = ata;
+        }
+        if (oix_createATAs.length === 0) return;
 
         const computeBudget = 200_000;
         const ix_priority = await createPriorityFeeInstructions(computeBudget);
-        oix_createUsdcATA.unshift(...ix_priority);
+        oix_createATAs.unshift(...ix_priority);
 
         const latestBlockhash = await this.connection.getLatestBlockhash();
         const messageV0 = new TransactionMessage({
             payerKey: this.wallet.publicKey,
             recentBlockhash: latestBlockhash.blockhash,
-            instructions: oix_createUsdcATA,
+            instructions: oix_createATAs,
         }).compileToV0Message();
-        const tx = new VersionedTransaction(messageV0);
-        const signedTx = await this.wallet.signTransaction(tx);
-        const signature = await this.connection.sendRawTransaction(signedTx.serialize());
+        const transaction = new VersionedTransaction(messageV0);
+
+        transaction.sign([this.wallet]);
+        const signature = await this.connection.sendRawTransaction(transaction.serialize());
         this.logger.info(`Created associated token accounts, signature: ${signature}`);
     }
 
     private async initClients(): Promise<void> {
         if (!this.wallet) throw new Error("Wallet is not initialized");
 
-        // Quartz
         this.quartzClient = await QuartzClient.fetchClient(this.connection);
 
-        // MarginFi
-        const marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), this.wallet, this.connection);
-        const wSolBank = marginfiClient.getBankByTokenSymbol(MARGINFI_FLASH_LOAN_TOKEN)?.address;
-        if (!wSolBank) throw Error(`${MARGINFI_FLASH_LOAN_TOKEN} bank not found`);
-        this.wSolBank = wSolBank;
-
-        const marginfiAccounts = await marginfiClient.getMarginfiAccountsForAuthority(this.wallet.publicKey);
+        this.marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), new DummyWallet(this.wallet.publicKey), this.connection);
+        const marginfiAccounts = await this.marginfiClient.getMarginfiAccountsForAuthority(this.wallet.publicKey);
         if (marginfiAccounts.length === 0) {
-            this.marginfiAccount = await marginfiClient.createMarginfiAccount();
+            this.marginfiAccount = await this.marginfiClient.createMarginfiAccount();
         } else {
             this.marginfiAccount = marginfiAccounts[0];
         }
@@ -120,6 +119,9 @@ export class AutoRepayBot extends AppLogger {
         setInterval(() => {
             this.logger.info(`Heartbeat | Bot address: ${this.wallet?.publicKey}`);
         }, 1000 * 60 * 60 * 24);
+
+        const prices = await getPrices();
+        this.logger.info(`[${this.wallet?.publicKey}] Prices: ${JSON.stringify(prices)}`);
 
         while (true) {
             let owners: PublicKey[];
@@ -150,12 +152,12 @@ export class AutoRepayBot extends AppLogger {
                     }
 
                     if (user.getHealth() === 0) {
-                        const repayAmount = user.getRepayAmountForTargetHealth(
-                            GOAL_HEALTH, 
-                            DRIFT_SOL_COLLATERAL_WEIGHT
-                        );
-                        this.attemptAutoRepay(user, repayAmount);
-                        continue;
+                        const { 
+                            repayAmountBaseUnits: repayAmount, 
+                            marketIndexLoan,
+                            marketIndexCollateral 
+                        } = await this.fetchAutoRepayParams(user);
+                        this.attemptAutoRepay(user, repayAmount, marketIndexLoan, marketIndexCollateral);
                     };
                 } catch (error) {
                     this.logger.error(`[${this.wallet?.publicKey}] Error processing user: ${error}`);
@@ -166,19 +168,54 @@ export class AutoRepayBot extends AppLogger {
         }
     }
 
+    private async fetchAutoRepayParams(user: QuartzUser): Promise<{
+        repayAmountBaseUnits: number,
+        marketIndexLoan: MarketIndex,
+        marketIndexCollateral: MarketIndex
+    }> {
+        const balances = await user.getMultipleTokenBalances([...MarketIndex]);
+        const prices = await getPrices();
+        
+        const values = Object.fromEntries(
+            Object.entries(balances).map(([index, balance]) => [
+                index,
+                prices[Number(index) as MarketIndex] * balance.toNumber()
+            ])
+        ) as Record<MarketIndex, number>;
+
+        const marketIndexLoan = getLowestValue(values);
+        const marketIndexCollateral = getHighestValue(values);
+
+        const repayValue = user.getRepayAmountForTargetHealth(
+            GOAL_HEALTH, 
+            TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber()
+        );
+
+        const targetRepayAmount = repayValue / prices[marketIndexCollateral];
+        const repayAmount = Math.max(targetRepayAmount, balances[marketIndexCollateral].toNumber());
+
+        return {
+            repayAmountBaseUnits: Math.floor(repayAmount),
+            marketIndexLoan,
+            marketIndexCollateral
+        }
+    }
+
     private async attemptAutoRepay(
         user: QuartzUser, 
-        repayAmount: number
+        repayAmount: number,
+        marketIndexLoan: MarketIndex,
+        marketIndexCollateral: MarketIndex
     ): Promise<void> {
-        if (await user.getTokenBalance(DRIFT_MARKET_INDEX_USDC) >= 0) {
-            this.logger.warn(`[${this.wallet?.publicKey}] Cannot execute auto-reapy for ${user.pubkey.toBase58()} as loan is in SOL`);
-            return;
-        }
-
         let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
-                const signature = await this.executeAutoRepay(user, repayAmount);
+                const signature = await this.executeAutoRepay(
+                    user, 
+                    repayAmount, 
+                    marketIndexLoan, 
+                    marketIndexCollateral
+                );
 
                 const latestBlockhash = await this.connection.getLatestBlockhash();
                 await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
@@ -207,93 +244,121 @@ export class AutoRepayBot extends AppLogger {
 
     private async executeAutoRepay (
         user: QuartzUser,
-        repayAmount: number
+        repayAmount: number,
+        marketIndexLoan: MarketIndex,
+        marketIndexCollateral: MarketIndex
     ): Promise<string> {
-        if (!this.wallet || !this.walletWSol || !this.walletUsdc) throw new Error("AutoRepayBot is not initialized");
+        if (!this.wallet || !this.splWallets[marketIndexLoan] || !this.splWallets[marketIndexCollateral]) {
+            throw new Error("AutoRepayBot is not initialized");
+        }
 
         // Fetch quote and balances
-        const jupiterQuotePromise = getJupiterSwapQuote(WSOL_MINT, USDC_MINT, repayAmount, JUPITER_SLIPPAGE_BPS);
-        const startingWSolBalancePromise = getTokenAccountBalance(this.connection, this.walletWSol);
+        const jupiterQuotePromise = getJupiterSwapQuote(
+            TOKENS[marketIndexCollateral].mint, 
+            TOKENS[marketIndexLoan].mint, 
+            repayAmount, 
+            JUPITER_SLIPPAGE_BPS
+        );
+        const startingCollateralBalancePromise = getTokenAccountBalance(this.connection, this.splWallets[marketIndexCollateral]);
         const startingLamportsBalancePromise = this.connection.getBalance(this.wallet.publicKey);
 
         const [
             startingLamportsBalance, 
-            startingWSolBalance, 
+            startingCollateralBalance, 
             jupiterQuote
-        ] = await Promise.all([startingLamportsBalancePromise, startingWSolBalancePromise, jupiterQuotePromise]);
+        ] = await Promise.all([startingLamportsBalancePromise, startingCollateralBalancePromise, jupiterQuotePromise]);
 
-        // Calculate balance amounts and wrap any wSOL needed
-        const requiredLamportsForRepay = Math.round(
+        // Calculate balance amounts
+        const requiredCollateralForRepay = Math.ceil(
             Number(jupiterQuote.inAmount) * (1 + (JUPITER_SLIPPAGE_BPS / 10000))
         );
-        const wrappableLamports = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
-        const amountExtraWSolRequired = Math.max(0, requiredLamportsForRepay - startingWSolBalance);
-        const lamportsToWrap = Math.min(amountExtraWSolRequired, wrappableLamports);
-        const lamportsToBorrow = Math.max(0, amountExtraWSolRequired - lamportsToWrap);
+        const amountExtraCollateralRequired = Math.max(0, requiredCollateralForRepay - startingCollateralBalance);
 
+        // Wrap any SOL if needed
+        let lamportsToWrap = 0;
         let oix_createWSolAta: TransactionInstruction[] = [];
-        if (lamportsToBorrow <= 0) {
-            oix_createWSolAta = await createAtaIfNeeded(this.connection, this.walletWSol, this.wallet.publicKey, WSOL_MINT);
-        }
-
         const oix_wrapSol: TransactionInstruction[] = [];
-        if (lamportsToWrap > 0) {
-            oix_wrapSol.push(
-                SystemProgram.transfer({
-                    fromPubkey: this.wallet.publicKey,
-                    toPubkey: this.walletWSol,
-                    lamports: lamportsToWrap
-                }),
-                createSyncNativeInstruction(this.walletWSol)
+        if (TOKENS[marketIndexLoan].mint === WSOL_MINT) {
+            oix_createWSolAta = await makeCreateAtaIxIfNeeded(
+                this.connection, 
+                this.splWallets[marketIndexLoan], 
+                this.wallet.publicKey, 
+                TOKENS[marketIndexLoan].mint, 
+                TOKEN_PROGRAM_ID
+            );
+        } else if (TOKENS[marketIndexCollateral].mint === WSOL_MINT) {
+            const wrappableLamports = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
+            lamportsToWrap = Math.min(amountExtraCollateralRequired, wrappableLamports);
+
+            oix_createWSolAta = await makeCreateAtaIxIfNeeded(
+                this.connection, 
+                this.splWallets[marketIndexCollateral], 
+                this.wallet.publicKey, 
+                TOKENS[marketIndexCollateral].mint, 
+                TOKEN_PROGRAM_ID
             );
         }
 
+        if (oix_createWSolAta.length > 0 && lamportsToWrap > 0) {
+            oix_wrapSol.push(
+                SystemProgram.transfer({
+                    fromPubkey: this.wallet.publicKey,
+                    toPubkey: this.splWallets[marketIndexCollateral],
+                    lamports: lamportsToWrap
+                }),
+                createSyncNativeInstruction(this.splWallets[marketIndexCollateral])
+            );
+        }
+
+        // Warning to keep gas funds balance
         if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
             this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`);
         }
 
         // Build instructions
-        const startingBalance = startingWSolBalance + lamportsToWrap + lamportsToBorrow;
+        const collateralToBorrow = Math.max(0, amountExtraCollateralRequired - lamportsToWrap);
+        const startingBalance = startingCollateralBalance + lamportsToWrap + collateralToBorrow;
         const {ixs: ixs_autoRepay, lookupTables} = await user.makeCollateralRepayIxs(
             this.wallet.publicKey,
-            this.walletUsdc,
-            USDC_MINT,
-            DRIFT_MARKET_INDEX_USDC,
-            this.walletWSol,
-            WSOL_MINT,
-            DRIFT_MARKET_INDEX_SOL,
+            marketIndexLoan,
+            marketIndexCollateral,
             startingBalance,
             jupiterQuote
         )
 
         const instructions = [...oix_createWSolAta, ...oix_wrapSol, ...ixs_autoRepay];
-        const tx = await this.buildAutoRepayTx(
-            lamportsToBorrow,
+        const transaction = await this.buildAutoRepayTx(
+            collateralToBorrow,
+            marketIndexCollateral,
             instructions, 
             lookupTables
         );
 
-        const signedTx = await this.wallet.signTransaction(tx);
-        const signature = await this.connection.sendRawTransaction(signedTx.serialize());
+        transaction.sign([this.wallet]);
+        const signature = await this.connection.sendRawTransaction(transaction.serialize());
         return signature;
     }
 
     private async buildAutoRepayTx(
-        lamportsLoan: number,
+        collateralToBorrow: number,
+        marketIndexCollateral: MarketIndex,
         instructions: TransactionInstruction[],
         lookupTables: AddressLookupTableAccount[]
     ): Promise<VersionedTransaction> {
-        if (!this.wallet || !this.walletWSol || !this.marginfiAccount || !this.wSolBank) {
+        if (!this.wallet || !this.marginfiAccount || !this.marginfiClient) {
             throw new Error("AutoRepayBot is not initialized");
         }
 
-        if (lamportsLoan > 0) {
-            const amountSolUi = new BigNumber(lamportsLoan).div(LAMPORTS_PER_SOL);
+        if (collateralToBorrow > 0) {
+            const amountCollateralDecimal = baseUnitToDecimal(collateralToBorrow, marketIndexCollateral);
+            const collateralBank = await this.marginfiClient.getBankByMint(TOKENS[marketIndexCollateral].mint);
+            if (!collateralBank) throw new Error("Collateral bank for flash loan not found");
+
             const loop = await this.marginfiAccount.makeLoopTx(
-                amountSolUi,
-                amountSolUi,
-                this.wSolBank,
-                this.wSolBank,
+                amountCollateralDecimal,
+                amountCollateralDecimal,
+                collateralBank.address,
+                collateralBank.address,
                 instructions,
                 lookupTables,
                 0.002,
