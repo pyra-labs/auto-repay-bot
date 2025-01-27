@@ -32,13 +32,14 @@ export async function fetchExactOutParams(
     collateralBalance: number,
 ) {
     // Ensure the collateral required for the loan repay is not higher than the collateral balance
-    const targetRepayAmountLoan = loanRepayValue / loanPrice;
     const collateralBalanceValue = baseUnitToDecimal(collateralBalance, marketIndexCollateral) * collateralPrice;
-    const loanEquivalent = collateralBalanceValue / loanPrice;
-    const repayAmountLoan = Math.min(targetRepayAmountLoan, loanEquivalent);
+    const loanEquivalentDecimal = (collateralBalanceValue / loanPrice) * (1 - JUPITER_SLIPPAGE_BPS / 10_000);
+    const loanEquivalentBaseUnits = decimalToBaseUnit(loanEquivalentDecimal, marketIndexLoan);
 
-    console.log(loanRepayValue, targetRepayAmountLoan, collateralBalanceValue, loanEquivalent, repayAmountLoan);
-
+    const targetRepayAmountLoanBaseUnits = decimalToBaseUnit(loanRepayValue / loanPrice, marketIndexLoan);
+    
+    const repayAmountLoan = Math.min(targetRepayAmountLoanBaseUnits, loanEquivalentBaseUnits);
+    
     await getJupiterSwapQuote(
         SwapMode.ExactOut,
         TOKENS[marketIndexLoan].mint, 
@@ -63,10 +64,8 @@ export async function fetchExactInParams(
     collateralBalance: number
 ) {
     const targetRepayAmountCollateralDecimal = loanRepayValue / collateralPrice;
-    const repayAmountCollateral = Math.max(
-        decimalToBaseUnit(targetRepayAmountCollateralDecimal, marketIndexCollateral), 
-        collateralBalance
-    );
+    const targetRepayAmountCollateralBaseUnits = decimalToBaseUnit(targetRepayAmountCollateralDecimal, marketIndexCollateral);
+    const repayAmountCollateral = Math.min(targetRepayAmountCollateralBaseUnits, collateralBalance);
 
     await getJupiterSwapQuote(
         SwapMode.ExactIn,

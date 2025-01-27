@@ -2,7 +2,7 @@ import { Connection, Keypair, type PublicKey, SystemProgram, type TransactionIns
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH } from "./config/constants.js";
+import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
 import { retryRPCWithBackoff, getTokenAccountBalance, getJupiterSwapQuote, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, getComputeUnitPriceIx, getComputerUnitLimitIx } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
@@ -130,30 +130,9 @@ export class AutoRepayBot extends AppLogger {
         if (!this.wallet || !this.quartzClient) throw new Error("Could not initialize correctly");
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet.publicKey}`);
 
-        // const user = await this.quartzClient.getQuartzAccount(this.wallet.publicKey);
-        // const balances = await user.getMultipleTokenBalances([...MarketIndex]);
-        // const prices = await getPrices();
-        // const {
-        //     collateralPositions,
-        //     loanPositions
-        // } = await getSortedPositions(balances, prices);
-
-        // const { 
-        //     swapAmountBaseUnits, 
-        //     marketIndexLoan,
-        //     marketIndexCollateral,
-        //     swapMode
-        // } = await this.fetchAutoRepayParams(
-        //     user,
-        //     loanPositions,
-        //     collateralPositions,
-        //     prices,
-        //     balances
-        // );
-
-        // this.attemptAutoRepay(user, swapAmountBaseUnits, marketIndexLoan, marketIndexCollateral, swapMode);
-
-        // return;
+        setInterval(() => {
+            this.logger.info(`Heartbeat | Bot address: ${this.wallet?.publicKey}`);
+        }, 1000 * 60 * 60 * 24);
 
         while (true) {
             let owners: PublicKey[];
@@ -194,24 +173,17 @@ export class AutoRepayBot extends AppLogger {
                         if (loanPositions.length === 0) {
                             throw new Error("No loan positions found");
                         }
-                        if (loanPositions[0]?.value ?? 0 < 0.01) {
-                            continue; // Ignore cases where largest loan's value is less than $0.01
+                        if (loanPositions[0]?.value ?? 0 < MIN_LOAN_VALUE_DOLLARS) {
+                            continue; // Ignore cases where largest loan's value is less than minimum amount
                         }
 
-                        const { 
-                            swapAmountBaseUnits, 
-                            marketIndexLoan,
-                            marketIndexCollateral,
-                            swapMode
-                        } = await this.fetchAutoRepayParams(
+                        this.attemptAutoRepay(
                             user,
                             loanPositions,
                             collateralPositions,
                             prices,
                             balances
                         );
-
-                        this.attemptAutoRepay(user, swapAmountBaseUnits, marketIndexLoan, marketIndexCollateral, swapMode);
                     };
                 } catch (error) {
                     this.logger.error(`[${this.wallet?.publicKey}] Error processing user: ${error}`);
@@ -244,21 +216,22 @@ export class AutoRepayBot extends AppLogger {
                 const marketIndexLoan = loanPosition.marketIndex;
                 const marketIndexCollateral = collateralPosition.marketIndex;
 
-                const loanRepayValue = user.getRepayAmountForTargetHealth(
+                const loanRepayValue = user.getRepayValueForTargetHealth(
                     GOAL_HEALTH, 
                     TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber()
                 );
 
-                console.log(user.getHealth(), GOAL_HEALTH, TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber(), loanRepayValue);
-
+                // Ignore cases where largest loan's value is less than $0.01
+                if (loanRepayValue < MIN_LOAN_VALUE_DOLLARS) continue; 
+ 
                 try {
                     return await fetchExactOutParams(
                         marketIndexCollateral, 
-                        marketIndexLoan,
+                        marketIndexLoan, 
                         loanRepayValue, 
                         prices[marketIndexLoan], 
-                        prices[marketIndexCollateral],
-                        balances[marketIndexCollateral].toNumber()
+                        prices[marketIndexCollateral], 
+                        balances[marketIndexCollateral].toNumber() 
                     );
                 } catch {
                     try {
@@ -278,18 +251,31 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async attemptAutoRepay(
-        user: QuartzUser, 
-        swapAmount: number,
-        marketIndexLoan: MarketIndex,
-        marketIndexCollateral: MarketIndex,
-        swapMode: SwapMode
+        user: QuartzUser,
+        loanPositions: Position[],
+        collateralPositions: Position[],
+        prices: Record<MarketIndex, number>,
+        balances: Record<MarketIndex, BN>
     ): Promise<void> {
         let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
+                const { 
+                    swapAmountBaseUnits, 
+                    marketIndexLoan,
+                    marketIndexCollateral,
+                    swapMode
+                } = await this.fetchAutoRepayParams(
+                    user,
+                    loanPositions,
+                    collateralPositions,
+                    prices,
+                    balances
+                );
+
                 const signature = await this.executeAutoRepay(
                     user, 
-                    swapAmount, 
+                    swapAmountBaseUnits, 
                     marketIndexLoan, 
                     marketIndexCollateral,
                     swapMode
@@ -305,13 +291,12 @@ export class AutoRepayBot extends AppLogger {
                 this.logger.warn(
                     `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying...`
                 );
+                console.log(lastError);
                 
                 const delay = 2_000 * (retry + 1);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
-
-        console.log(lastError);
 
         try {
             const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
