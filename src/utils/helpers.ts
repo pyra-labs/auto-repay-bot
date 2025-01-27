@@ -1,19 +1,87 @@
-import { type Connection, ComputeBudgetProgram, type PublicKey } from "@solana/web3.js";
+import { type Connection, ComputeBudgetProgram, type PublicKey, VersionedTransaction, TransactionMessage } from "@solana/web3.js";
 import type { Logger } from "winston";
-import type { QuoteResponse } from "@jup-ag/api";
-import { MarketIndex, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
-import type { PythResponse } from "../types/pyth.interface.js";
+import { SwapMode, type QuoteResponse } from "@jup-ag/api";
+import { baseUnitToDecimal, decimalToBaseUnit, MarketIndex, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
+import type { PythResponse } from "../types/Pyth.interface.js";
+import type { Position } from "../types/Position.interface.js";
+import { DEFAULT_COMPUTE_UNIT_LIMIT, JUPITER_SLIPPAGE_BPS } from "../config/constants.js";
+import type { AddressLookupTableAccount, TransactionInstruction } from "@solana/web3.js";
 
 export async function getJupiterSwapQuote(
+    swapMode: SwapMode,
     inputMint: PublicKey, 
     outputMint: PublicKey, 
     amount: number,
     slippageBps: number
 ) {
     const quoteEndpoint = 
-        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=ExactOut&onlyDirectRoutes=true`;
-    const quoteResponse = await (await fetch(quoteEndpoint)).json() as QuoteResponse;
-    return quoteResponse;
+        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
+    const response = await fetch(quoteEndpoint);
+    if (!response.ok) throw new Error("Could not fetch Jupiter quote");
+    
+    const body = await response.json() as QuoteResponse;
+    return body;
+}
+
+export async function fetchExactOutParams(
+    marketIndexCollateral: MarketIndex,
+    marketIndexLoan: MarketIndex,
+    loanRepayValue: number,
+    loanPrice: number,
+    collateralPrice: number,
+    collateralBalance: number,
+) {
+    // Ensure the collateral required for the loan repay is not higher than the collateral balance
+    const targetRepayAmountLoan = loanRepayValue / loanPrice;
+    const collateralBalanceValue = baseUnitToDecimal(collateralBalance, marketIndexCollateral) * collateralPrice;
+    const loanEquivalent = collateralBalanceValue / loanPrice;
+    const repayAmountLoan = Math.min(targetRepayAmountLoan, loanEquivalent);
+
+    console.log(loanRepayValue, targetRepayAmountLoan, collateralBalanceValue, loanEquivalent, repayAmountLoan);
+
+    await getJupiterSwapQuote(
+        SwapMode.ExactOut,
+        TOKENS[marketIndexLoan].mint, 
+        TOKENS[marketIndexCollateral].mint, 
+        repayAmountLoan, 
+        JUPITER_SLIPPAGE_BPS
+    );
+
+    return {
+        swapMode: SwapMode.ExactOut,
+        swapAmountBaseUnits: Math.floor(repayAmountLoan),
+        marketIndexLoan,
+        marketIndexCollateral
+    }
+}
+
+export async function fetchExactInParams(
+    marketIndexCollateral: MarketIndex,
+    marketIndexLoan: MarketIndex,
+    loanRepayValue: number,
+    collateralPrice: number,
+    collateralBalance: number
+) {
+    const targetRepayAmountCollateralDecimal = loanRepayValue / collateralPrice;
+    const repayAmountCollateral = Math.max(
+        decimalToBaseUnit(targetRepayAmountCollateralDecimal, marketIndexCollateral), 
+        collateralBalance
+    );
+
+    await getJupiterSwapQuote(
+        SwapMode.ExactIn,
+        TOKENS[marketIndexCollateral].mint, 
+        TOKENS[marketIndexLoan].mint, 
+        repayAmountCollateral, 
+        JUPITER_SLIPPAGE_BPS
+    );
+
+    return {
+        swapMode: SwapMode.ExactIn,
+        swapAmountBaseUnits: Math.floor(repayAmountCollateral),
+        marketIndexLoan,
+        marketIndexCollateral
+    }
 }
 
 export const retryRPCWithBackoff = async <T>(
@@ -42,16 +110,6 @@ export const retryRPCWithBackoff = async <T>(
         }
     }
     throw lastError;
-}
-
-export const createPriorityFeeInstructions = async (computeBudget: number) => {
-    const computeLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
-        units: computeBudget,
-    });
-    const computePriceIx = ComputeBudgetProgram.setComputeUnitPrice({
-        microLamports: await 1_000_000 // TODO: Implement fetching priority fee
-    });
-    return [computeLimitIx, computePriceIx];
 }
 
 export async function getTokenAccountBalance(connection: Connection, tokenAccount: PublicKey) {
@@ -129,33 +187,40 @@ async function getPricesCoinGecko(): Promise<Record<MarketIndex, number>> {
     return prices;
 }
 
-export function getLowestValue(values: Record<MarketIndex, number>): MarketIndex {
-    let lowestValue = Number.MAX_VALUE;
-    let lowestValueIndex: MarketIndex = MarketIndex[0];
+export async function getSortedPositions(
+    balances: Record<MarketIndex, BN>,
+    prices: Record<MarketIndex, number>
+): Promise<{
+    collateralPositions: Position[],
+    loanPositions: Position[]
+}> { 
+    const values = Object.fromEntries(
+        Object.entries(balances).map(([index, balance]) => [
+            index,
+            prices[Number(index) as MarketIndex] * balance.toNumber()
+        ])
+    ) as Record<MarketIndex, number>;
 
-    for (const [marketIndex, value] of Object.entries(values)) {
-        const numericValue = value;
-        if (numericValue < lowestValue) {
-            lowestValue = numericValue;
-            lowestValueIndex = Number(marketIndex) as MarketIndex;
-        }
-    }
-    return lowestValueIndex;
-}
+    const collateralPositions = Object.entries(values)
+        .filter(([, value]) => value > 0)
+        .sort(([, a], [, b]) => b - a) // Sort high to low
+        .map(([index, value]) => ({
+            marketIndex: Number(index) as MarketIndex,
+            value
+        }));
 
-export function getHighestValue(values: Record<MarketIndex, number>): MarketIndex {
-    let highestValue = Number.MIN_VALUE;
-    let highestValueIndex: MarketIndex = MarketIndex[0];
+    const loanPositions = Object.entries(values)
+        .filter(([, value]) => value < 0)
+        .sort(([, a], [, b]) => a - b) // Sort low to high (meaning high to low in absolute value)
+        .map(([index, value]) => ({
+            marketIndex: Number(index) as MarketIndex,
+            value: Math.abs(value)
+        }));
 
-    for (const [marketIndex, value] of Object.entries(values)) {
-        const numericValue = value;
-        if (numericValue > highestValue) {
-            highestValue = numericValue;
-            highestValueIndex = Number(marketIndex) as MarketIndex;
-        }
-    }
-    
-    return highestValueIndex;
+    return { 
+        collateralPositions, 
+        loanPositions
+    };
 }
 
 export async function getRepayMarketIndices(user: QuartzUser) {
@@ -189,4 +254,52 @@ export async function getRepayMarketIndices(user: QuartzUser) {
         marketIndexLoan: lowestBalance.index,
         marketIndexCollateral: highestBalance.index
     };
+}
+
+export async function getComputeUnitPrice() {
+    // TODO: Calculate actual fee
+    return 1_250_000;
+};
+
+export async function getComputeUnitPriceIx() {
+    const computeUnitPrice = await getComputeUnitPrice();
+    return ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: computeUnitPrice,
+    });
+}
+
+export async function getComputeUnitLimit(
+    connection: Connection,
+    instructions: TransactionInstruction[],
+    address: PublicKey,
+    blockhash: string,
+    lookupTables: AddressLookupTableAccount[] = []
+) {
+    const messageV0 = new TransactionMessage({
+        payerKey: address,
+        recentBlockhash: blockhash,
+        instructions: instructions
+    }).compileToV0Message(lookupTables);
+    const simulation = await connection.simulateTransaction(
+        new VersionedTransaction(messageV0)
+    );
+
+    const estimatedComputeUnits = simulation.value.unitsConsumed;
+    const computeUnitLimit = estimatedComputeUnits 
+        ? Math.ceil(estimatedComputeUnits * 1.3) 
+        : DEFAULT_COMPUTE_UNIT_LIMIT;
+    return computeUnitLimit;
+}
+
+export async function getComputerUnitLimitIx(
+    connection: Connection,
+    instructions: TransactionInstruction[],
+    address: PublicKey,
+    blockhash: string,
+    lookupTables: AddressLookupTableAccount[] = []
+) {
+    const computeUnitLimit = await getComputeUnitLimit(connection, instructions, address, blockhash, lookupTables);
+    return ComputeBudgetProgram.setComputeUnitLimit({
+        units: computeUnitLimit,
+    });
 }

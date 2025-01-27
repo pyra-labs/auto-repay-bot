@@ -25,23 +25,14 @@ const envSchema = z.object({
     RPC_URL: z.string().url(),
     USE_AWS: z.string().transform((str) => str === "true"),
     AWS_SECRET_NAME: z.string().nullable(),
-    AWS_REGION: z.string().nullable(),
-    EMAIL_TO: z.string()
-        .transform((str) => {
-            try {
-                const emails = str.split(',').map(email => email.trim());
-                if (!emails.every(email => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error();
-                return emails;
-            } catch {
-                throw new Error("Invalid email list format: must be comma-separated email addresses");
-            }
-        }),
-    EMAIL_FROM: z.string().email(),
-    EMAIL_HOST: z.string(),
-    EMAIL_PORT: z.coerce.number().min(0),
-    EMAIL_USER: z.string().email(),
-    EMAIL_PASSWORD: z.string(),
+    AWS_REGION: z.string().nullable()
 });
 
-const config = envSchema.parse(process.env);
+const config = envSchema.parse({
+    WALLET_KEYPAIR: process.env.WALLET_KEYPAIR,
+    RPC_URL: process.env.RPC_URL,
+    USE_AWS: process.env.USE_AWS,
+    AWS_SECRET_NAME: process.env.AWS_SECRET_NAME,
+    AWS_REGION: process.env.AWS_REGION
+});
 export default config;

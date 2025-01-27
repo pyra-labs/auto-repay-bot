@@ -3,12 +3,15 @@ import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH } from "./config/constants.js";
-import { retryRPCWithBackoff, createPriorityFeeInstructions, getTokenAccountBalance, getJupiterSwapQuote, getLowestValue, getHighestValue, getPrices } from "./utils/helpers.js";
-import { AppLogger } from "./utils/logger.js";
+import { retryRPCWithBackoff, getTokenAccountBalance, getJupiterSwapQuote, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, getComputeUnitPriceIx, getComputerUnitLimitIx } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { getTokenProgram, MarketIndex, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, DummyWallet, WSOL_MINT, baseUnitToDecimal } from "@quartz-labs/sdk";
+import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, WSOL_MINT, baseUnitToDecimal, type BN } from "@quartz-labs/sdk";
+import { NodeWallet } from "@mrgnlabs/mrgn-common";
+import type { SwapMode } from "@jup-ag/api";
+import type { Position } from "./types/Position.interface.js";
+import { AppLogger } from "@quartz-labs/logger";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
@@ -22,9 +25,13 @@ export class AutoRepayBot extends AppLogger {
     private marginfiAccount: MarginfiAccountWrapper | undefined;
 
     constructor() {
-        super("Auto-Repay Bot");
+        super({
+            name: "Auto-Repay Bot",
+            dailyErrorCacheTimeMs: 1000 * 60 * 60 // 1 hour
+        });
 
         this.connection = new Connection(config.RPC_URL);
+        
         this.initPromise = this.initialize();
     }
 
@@ -80,9 +87,15 @@ export class AutoRepayBot extends AppLogger {
         }
         if (oix_createATAs.length === 0) return;
 
-        const computeBudget = 200_000;
-        const ix_priority = await createPriorityFeeInstructions(computeBudget);
-        oix_createATAs.unshift(...ix_priority);
+        const blockhash = (await this.connection.getLatestBlockhash()).blockhash;
+        const ix_computeLimit = await getComputerUnitLimitIx(
+            this.connection, 
+            oix_createATAs, 
+            this.wallet.publicKey, 
+            blockhash
+        );
+        const ix_computePrice = await getComputeUnitPriceIx();
+        oix_createATAs.unshift(ix_computeLimit, ix_computePrice);
 
         const latestBlockhash = await this.connection.getLatestBlockhash();
         const messageV0 = new TransactionMessage({
@@ -94,6 +107,7 @@ export class AutoRepayBot extends AppLogger {
 
         transaction.sign([this.wallet]);
         const signature = await this.connection.sendRawTransaction(transaction.serialize());
+        await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
         this.logger.info(`Created associated token accounts, signature: ${signature}`);
     }
 
@@ -102,7 +116,7 @@ export class AutoRepayBot extends AppLogger {
 
         this.quartzClient = await QuartzClient.fetchClient(this.connection);
 
-        this.marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), new DummyWallet(this.wallet.publicKey), this.connection);
+        this.marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), new NodeWallet(this.wallet), this.connection);
         const marginfiAccounts = await this.marginfiClient.getMarginfiAccountsForAuthority(this.wallet.publicKey);
         if (marginfiAccounts.length === 0) {
             this.marginfiAccount = await this.marginfiClient.createMarginfiAccount();
@@ -115,13 +129,31 @@ export class AutoRepayBot extends AppLogger {
         await this.initPromise;
         if (!this.wallet || !this.quartzClient) throw new Error("Could not initialize correctly");
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet.publicKey}`);
-        
-        setInterval(() => {
-            this.logger.info(`Heartbeat | Bot address: ${this.wallet?.publicKey}`);
-        }, 1000 * 60 * 60 * 24);
 
-        const prices = await getPrices();
-        this.logger.info(`[${this.wallet?.publicKey}] Prices: ${JSON.stringify(prices)}`);
+        // const user = await this.quartzClient.getQuartzAccount(this.wallet.publicKey);
+        // const balances = await user.getMultipleTokenBalances([...MarketIndex]);
+        // const prices = await getPrices();
+        // const {
+        //     collateralPositions,
+        //     loanPositions
+        // } = await getSortedPositions(balances, prices);
+
+        // const { 
+        //     swapAmountBaseUnits, 
+        //     marketIndexLoan,
+        //     marketIndexCollateral,
+        //     swapMode
+        // } = await this.fetchAutoRepayParams(
+        //     user,
+        //     loanPositions,
+        //     collateralPositions,
+        //     prices,
+        //     balances
+        // );
+
+        // this.attemptAutoRepay(user, swapAmountBaseUnits, marketIndexLoan, marketIndexCollateral, swapMode);
+
+        // return;
 
         while (true) {
             let owners: PublicKey[];
@@ -152,12 +184,34 @@ export class AutoRepayBot extends AppLogger {
                     }
 
                     if (user.getHealth() === 0) {
+                        const balances = await user.getMultipleTokenBalances([...MarketIndex]);
+                        const prices = await getPrices();
+                        const {
+                            collateralPositions,
+                            loanPositions
+                        } = await getSortedPositions(balances, prices);
+
+                        if (loanPositions.length === 0) {
+                            throw new Error("No loan positions found");
+                        }
+                        if (loanPositions[0]?.value ?? 0 < 0.01) {
+                            continue; // Ignore cases where largest loan's value is less than $0.01
+                        }
+
                         const { 
-                            repayAmountBaseUnits: repayAmount, 
+                            swapAmountBaseUnits, 
                             marketIndexLoan,
-                            marketIndexCollateral 
-                        } = await this.fetchAutoRepayParams(user);
-                        this.attemptAutoRepay(user, repayAmount, marketIndexLoan, marketIndexCollateral);
+                            marketIndexCollateral,
+                            swapMode
+                        } = await this.fetchAutoRepayParams(
+                            user,
+                            loanPositions,
+                            collateralPositions,
+                            prices,
+                            balances
+                        );
+
+                        this.attemptAutoRepay(user, swapAmountBaseUnits, marketIndexLoan, marketIndexCollateral, swapMode);
                     };
                 } catch (error) {
                     this.logger.error(`[${this.wallet?.publicKey}] Error processing user: ${error}`);
@@ -168,53 +222,77 @@ export class AutoRepayBot extends AppLogger {
         }
     }
 
-    private async fetchAutoRepayParams(user: QuartzUser): Promise<{
-        repayAmountBaseUnits: number,
+    private async fetchAutoRepayParams(
+        user: QuartzUser,
+        loanPositions: Position[],
+        collateralPositions: Position[],
+        prices: Record<MarketIndex, number>,
+        balances: Record<MarketIndex, BN>
+    ): Promise<{
+        swapAmountBaseUnits: number,
         marketIndexLoan: MarketIndex,
-        marketIndexCollateral: MarketIndex
+        marketIndexCollateral: MarketIndex,
+        swapMode: SwapMode
     }> {
-        const balances = await user.getMultipleTokenBalances([...MarketIndex]);
-        const prices = await getPrices();
-        
-        const values = Object.fromEntries(
-            Object.entries(balances).map(([index, balance]) => [
-                index,
-                prices[Number(index) as MarketIndex] * balance.toNumber()
-            ])
-        ) as Record<MarketIndex, number>;
+        // Try each token pair for a Jupiter quote, from largest to smallest values
+        for (const loanPosition of loanPositions) {
+            for (const collateralPosition of collateralPositions) {
+                if (loanPosition.marketIndex === collateralPosition.marketIndex) {
+                    continue;
+                }
 
-        const marketIndexLoan = getLowestValue(values);
-        const marketIndexCollateral = getHighestValue(values);
+                const marketIndexLoan = loanPosition.marketIndex;
+                const marketIndexCollateral = collateralPosition.marketIndex;
 
-        const repayValue = user.getRepayAmountForTargetHealth(
-            GOAL_HEALTH, 
-            TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber()
-        );
+                const loanRepayValue = user.getRepayAmountForTargetHealth(
+                    GOAL_HEALTH, 
+                    TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber()
+                );
 
-        const targetRepayAmount = repayValue / prices[marketIndexCollateral];
-        const repayAmount = Math.max(targetRepayAmount, balances[marketIndexCollateral].toNumber());
+                console.log(user.getHealth(), GOAL_HEALTH, TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber(), loanRepayValue);
 
-        return {
-            repayAmountBaseUnits: Math.floor(repayAmount),
-            marketIndexLoan,
-            marketIndexCollateral
+                try {
+                    return await fetchExactOutParams(
+                        marketIndexCollateral, 
+                        marketIndexLoan,
+                        loanRepayValue, 
+                        prices[marketIndexLoan], 
+                        prices[marketIndexCollateral],
+                        balances[marketIndexCollateral].toNumber()
+                    );
+                } catch {
+                    try {
+                        return await fetchExactInParams(
+                            marketIndexCollateral, 
+                            marketIndexLoan,
+                            loanRepayValue, 
+                            prices[marketIndexCollateral], 
+                            balances[marketIndexCollateral].toNumber()
+                        );
+                    } catch { } // Ignore error until no routes are found
+                }
+            }
         }
+
+        throw new Error("No valid Jupiter quote found");
     }
 
     private async attemptAutoRepay(
         user: QuartzUser, 
-        repayAmount: number,
+        swapAmount: number,
         marketIndexLoan: MarketIndex,
-        marketIndexCollateral: MarketIndex
+        marketIndexCollateral: MarketIndex,
+        swapMode: SwapMode
     ): Promise<void> {
         let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
                 const signature = await this.executeAutoRepay(
                     user, 
-                    repayAmount, 
+                    swapAmount, 
                     marketIndexLoan, 
-                    marketIndexCollateral
+                    marketIndexCollateral,
+                    swapMode
                 );
 
                 const latestBlockhash = await this.connection.getLatestBlockhash();
@@ -225,13 +303,15 @@ export class AutoRepayBot extends AppLogger {
             } catch (error) {
                 lastError = error as Error;
                 this.logger.warn(
-                    `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${error}`
+                    `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying...`
                 );
                 
-                const delay = 1_000 * (retry + 1);
+                const delay = 2_000 * (retry + 1);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
+
+        console.log(lastError);
 
         try {
             const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
@@ -244,9 +324,10 @@ export class AutoRepayBot extends AppLogger {
 
     private async executeAutoRepay (
         user: QuartzUser,
-        repayAmount: number,
+        swapAmount: number,
         marketIndexLoan: MarketIndex,
-        marketIndexCollateral: MarketIndex
+        marketIndexCollateral: MarketIndex,
+        swapMode: SwapMode
     ): Promise<string> {
         if (!this.wallet || !this.splWallets[marketIndexLoan] || !this.splWallets[marketIndexCollateral]) {
             throw new Error("AutoRepayBot is not initialized");
@@ -254,9 +335,10 @@ export class AutoRepayBot extends AppLogger {
 
         // Fetch quote and balances
         const jupiterQuotePromise = getJupiterSwapQuote(
+            swapMode,
             TOKENS[marketIndexCollateral].mint, 
             TOKENS[marketIndexLoan].mint, 
-            repayAmount, 
+            swapAmount, 
             JUPITER_SLIPPAGE_BPS
         );
         const startingCollateralBalancePromise = getTokenAccountBalance(this.connection, this.splWallets[marketIndexCollateral]);
@@ -317,12 +399,10 @@ export class AutoRepayBot extends AppLogger {
 
         // Build instructions
         const collateralToBorrow = Math.max(0, amountExtraCollateralRequired - lamportsToWrap);
-        const startingBalance = startingCollateralBalance + lamportsToWrap + collateralToBorrow;
         const {ixs: ixs_autoRepay, lookupTables} = await user.makeCollateralRepayIxs(
             this.wallet.publicKey,
             marketIndexLoan,
             marketIndexCollateral,
-            startingBalance,
             jupiterQuote
         )
 
@@ -354,23 +434,39 @@ export class AutoRepayBot extends AppLogger {
             const collateralBank = await this.marginfiClient.getBankByMint(TOKENS[marketIndexCollateral].mint);
             if (!collateralBank) throw new Error("Collateral bank for flash loan not found");
 
-            const loop = await this.marginfiAccount.makeLoopTx(
-                amountCollateralDecimal,
-                amountCollateralDecimal,
-                collateralBank.address,
-                collateralBank.address,
-                instructions,
-                lookupTables,
-                0.002,
-                false
-            );
-            return loop.flashloanTx;
+            const ix_computePrice = await getComputeUnitPriceIx();
+            const { instructions: ix_borrow } = await this.marginfiAccount.makeBorrowIx(amountCollateralDecimal, collateralBank.address, {
+                createAtas: false,
+                wrapAndUnwrapSol: false
+            });
+            const { instructions: ix_deposit } = await this.marginfiAccount.makeDepositIx(amountCollateralDecimal, collateralBank.address, {
+                wrapAndUnwrapSol: false
+            });
+
+            const flashloanTx = await this.marginfiAccount.buildFlashLoanTx({
+                ixs: [
+                    ix_computePrice, 
+                    ...ix_borrow, 
+                    ...instructions, 
+                    ...ix_deposit
+                ],
+                addressLookupTableAccounts: lookupTables
+            });
+
+            return flashloanTx;
         }
 
         // If no loan required, build regular tx
-        const computeBudget = 700_000;
-        const ix_priority = await createPriorityFeeInstructions(computeBudget);
-        instructions.unshift(...ix_priority);
+        const blockhash = (await this.connection.getLatestBlockhash()).blockhash;
+        const ix_computeLimit = await getComputerUnitLimitIx(
+            this.connection, 
+            instructions, 
+            this.wallet.publicKey, 
+            blockhash,
+            lookupTables 
+        );
+        const ix_computePrice = await getComputeUnitPriceIx();
+        instructions.unshift(ix_computeLimit, ix_computePrice);
 
         const latestBlockhash = await this.connection.getLatestBlockhash();
         const messageV0 = new TransactionMessage({
