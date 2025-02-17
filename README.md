@@ -1,12 +1,12 @@
 <div align="center">
-  <img width="2500" alt="Quartz" src="https://cdn.prod.website-files.com/65707af0f4af991289bbd432/670e37661cdb2314fe8ba469_logo-glow-banner.jpg" />
+  <img width="2500" alt="Quartz" src="https://cdn.prod.website-files.com/67504dd7fde047775f88c355/67b380029cf6f3d8e10349bf_docs_banner.jpg" />
 
   <h1 style="margin-top:20px;">Quartz Auto-Repay Bot</h1>
 </div>
 
-Quartz loans are issued through integrated protocols, which have liquidation thresholds - the maximum loan amount you can take out against your deposited collateral. If the value of deposited collateral falls too low, it will be liquidated (incurring a 5% fee).
+Quartz loans are issued through integrated protocols, which have liquidation thresholds - the maximum loan amount you can take out against your deposited collateral. If the value of deposited collateral falls too low, it will be liquidated (incurring up to 10% in fees).
 
-This bot monitors all Quartz accounts and calls the Auto-Repay instruction on any that are close to this liquidation threshold. Auto-Repay will swap the collateral to pay off the loan using a Jupiter swap with <1% slippage.
+This bot monitors all Quartz accounts and calls the Auto-Repay instruction on any that are close to this liquidation threshold. Auto-Repay will swap the collateral to pay off the loan using a Jupiter swap with 1% slippage.
 
 ## Implementation
 
@@ -18,10 +18,10 @@ Feel free to fork this repository and make optimisations. The Quartz protocol wi
 
 To carry out an Auto-Repay transaction, the following instructions must be called in order:
 
-1. auto_repay_start (Quartz)
-2. exact_out_route (Jupiter)
-3. auto_repay_deposit (Quartz)
-4. auto_repay_withdraw (Quartz)
+1. start_collateral_repay (Quartz)
+2. Any swap transaction (eg: Jupiter)
+3. deposit_collateral_repay (Quartz)
+4. withdraw_collateral_repay (Quartz)
 
 This bot wraps these instructions around a MarginFi flash loan. See executeAutoRepay() in src/collateralRepayBot.ts for exactly how it does this.
 

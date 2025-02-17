@@ -3,11 +3,11 @@ import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
-import { getTokenAccountBalance, getJupiterSwapQuote, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, getComputeUnitPriceIx, getComputerUnitLimitIx } from "./utils/helpers.js";
+import { getTokenAccountBalance, getJupiterSwapQuote, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, getComputeUnitPriceIx, getComputerUnitLimitIx, makeJupiterIx } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, WSOL_MINT, baseUnitToDecimal, type BN, retryWithBackoff } from "@quartz-labs/sdk";
+import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { SwapMode } from "@jup-ag/api";
 import type { Position } from "./types/Position.interface.js";
@@ -213,9 +213,12 @@ export class AutoRepayBot extends AppLogger {
                 const marketIndexLoan = loanPosition.marketIndex;
                 const marketIndexCollateral = collateralPosition.marketIndex;
 
+                const collateralWeight = TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber();
+                const liabilityWeight = (100 - collateralWeight) + 100; // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
                 const loanRepayValue = user.getRepayValueForTargetHealth(
                     GOAL_HEALTH, 
-                    TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber()
+                    collateralWeight,
+                    liabilityWeight
                 );
 
                 // Ignore cases where largest loan's value is less than $0.01
@@ -341,6 +344,8 @@ export class AutoRepayBot extends AppLogger {
             jupiterQuote
         ] = await Promise.all([startingLamportsBalancePromise, startingCollateralBalancePromise, jupiterQuotePromise]);
 
+        const jupiterIxPromise = makeJupiterIx(this.connection, jupiterQuote, this.wallet.publicKey);
+
         // Calculate balance amounts
         const requiredCollateralForRepay = Math.ceil(
             Number(jupiterQuote.inAmount) * (1 + (JUPITER_SLIPPAGE_BPS / 10000))
@@ -351,7 +356,7 @@ export class AutoRepayBot extends AppLogger {
         let lamportsToWrap = 0;
         let oix_createWSolAta: TransactionInstruction[] = [];
         const oix_wrapSol: TransactionInstruction[] = [];
-        if (TOKENS[marketIndexLoan].mint === WSOL_MINT) {
+        if (marketIndexLoan === MARKET_INDEX_SOL) {
             oix_createWSolAta = await makeCreateAtaIxIfNeeded(
                 this.connection, 
                 this.splWallets[marketIndexLoan], 
@@ -359,7 +364,7 @@ export class AutoRepayBot extends AppLogger {
                 TOKENS[marketIndexLoan].mint, 
                 TOKEN_PROGRAM_ID
             );
-        } else if (TOKENS[marketIndexCollateral].mint === WSOL_MINT) {
+        } else if (marketIndexCollateral === MARKET_INDEX_SOL) {
             const wrappableLamports = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
             lamportsToWrap = Math.min(amountExtraCollateralRequired, wrappableLamports);
 
@@ -389,12 +394,16 @@ export class AutoRepayBot extends AppLogger {
         }
 
         // Build instructions
+        const {
+            ix: ix_jupiter,
+            lookupTables: jupiterLookupTables
+        } = await jupiterIxPromise;
         const collateralToBorrow = Math.max(0, amountExtraCollateralRequired - lamportsToWrap);
-        const {ixs: ixs_autoRepay, lookupTables} = await user.makeCollateralRepayIxs(
+        const {ixs: ixs_autoRepay, lookupTables: quartzLookupTables} = await user.makeCollateralRepayIxs(
             this.wallet.publicKey,
             marketIndexLoan,
             marketIndexCollateral,
-            jupiterQuote
+            ix_jupiter
         )
 
         const instructions = [...oix_createWSolAta, ...oix_wrapSol, ...ixs_autoRepay];
@@ -402,7 +411,7 @@ export class AutoRepayBot extends AppLogger {
             collateralToBorrow,
             marketIndexCollateral,
             instructions, 
-            lookupTables
+            [...jupiterLookupTables, ...quartzLookupTables]
         );
 
         transaction.sign([this.wallet]);

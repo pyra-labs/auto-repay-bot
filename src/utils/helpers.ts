@@ -1,10 +1,10 @@
-import { type Connection, ComputeBudgetProgram, type PublicKey, VersionedTransaction, TransactionMessage } from "@solana/web3.js";
+import { type Connection, ComputeBudgetProgram, PublicKey, VersionedTransaction, TransactionMessage } from "@solana/web3.js";
 import { SwapMode, type QuoteResponse } from "@jup-ag/api";
 import { baseUnitToDecimal, decimalToBaseUnit, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
 import type { PythResponse } from "../types/Pyth.interface.js";
 import type { Position } from "../types/Position.interface.js";
 import { DEFAULT_COMPUTE_UNIT_LIMIT, JUPITER_SLIPPAGE_BPS } from "../config/constants.js";
-import type { AddressLookupTableAccount, TransactionInstruction } from "@solana/web3.js";
+import { AddressLookupTableAccount, TransactionInstruction } from "@solana/web3.js";
 
 export async function getJupiterSwapQuote(
     swapMode: SwapMode,
@@ -20,6 +20,82 @@ export async function getJupiterSwapQuote(
     
     const body = await response.json() as QuoteResponse;
     return body;
+}
+
+export async function makeJupiterIx(
+    connection: Connection,
+    jupiterQuote: QuoteResponse,
+    address: PublicKey
+): Promise<{
+    ix: TransactionInstruction,
+    lookupTables: AddressLookupTableAccount[]
+}> {
+    const instructions = await (
+        await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                jupiterQuote,
+                userPublicKey: address.toBase58(),
+            })
+        })
+        // biome-ignore lint: Allow any for Jupiter API response
+    ).json() as any;
+    
+    if (instructions.error) {
+        throw new Error(`Failed to get swap instructions: ${instructions.error}`);
+    }
+
+    const {
+        swapInstruction,
+        addressLookupTableAddresses
+    } = instructions;
+
+    // biome-ignore lint: Allow any for Jupiter API response
+    const deserializeInstruction = (instruction: any) => {
+        return new TransactionInstruction({
+            programId: new PublicKey(instruction.programId),
+            // biome-ignore lint: Allow any for Jupiter API response
+            keys: instruction.accounts.map((key: any) => ({
+                pubkey: new PublicKey(key.pubkey),
+                isSigner: key.isSigner,
+                isWritable: key.isWritable,
+            })),
+            data: Buffer.from(instruction.data, "base64"),
+        });
+    };
+    
+    const getAddressLookupTableAccounts = async (
+        keys: string[]
+    ): Promise<AddressLookupTableAccount[]> => {
+        const addressLookupTableAccountInfos =
+        await connection.getMultipleAccountsInfo(
+            keys.map((key) => new PublicKey(key))
+        );
+    
+        return addressLookupTableAccountInfos.reduce((acc, accountInfo, index) => {
+        const addressLookupTableAddress = keys[index];
+        if (accountInfo && addressLookupTableAddress) {
+            const addressLookupTableAccount = new AddressLookupTableAccount({
+            key: new PublicKey(addressLookupTableAddress),
+            state: AddressLookupTableAccount.deserialize(accountInfo.data),
+            });
+            acc.push(addressLookupTableAccount);
+        }
+    
+        return acc;
+        }, new Array<AddressLookupTableAccount>());
+    };
+    
+    const addressLookupTableAccounts = await getAddressLookupTableAccounts(addressLookupTableAddresses);
+
+
+    return {
+        ix: deserializeInstruction(swapInstruction),
+        lookupTables: addressLookupTableAccounts
+    };
 }
 
 export async function fetchExactOutParams(
