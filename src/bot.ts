@@ -165,6 +165,8 @@ export class AutoRepayBot extends AppLogger {
                         continue;
                     }
 
+                    console.log()
+
                     if (user.getHealth() === 0) {
                         this.attemptAutoRepay(user);
                     };
@@ -179,7 +181,7 @@ export class AutoRepayBot extends AppLogger {
 
     private async checkRequiresUpgrade(user: QuartzUser): Promise<boolean> {
         const vaultPdaAccount = await this.connection.getAccountInfo(user.vaultPubkey);
-        if (vaultPdaAccount === null) return false;
+        if (vaultPdaAccount === null) return true;
     
         const OLD_VAULT_SIZE = 41;
         return (vaultPdaAccount.data.length <= OLD_VAULT_SIZE);
