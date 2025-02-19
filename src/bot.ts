@@ -3,15 +3,16 @@ import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
-import { getTokenAccountBalance, getJupiterSwapQuote, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, getComputeUnitPriceIx, getComputerUnitLimitIx, makeJupiterIx } from "./utils/helpers.js";
+import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL } from "@quartz-labs/sdk";
+import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, getComputerUnitLimitIx } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { SwapMode } from "@jup-ag/api";
 import type { Position } from "./types/Position.interface.js";
 import { AppLogger } from "@quartz-labs/logger";
+import { getJupiterSwapQuote, makeJupiterIx } from "./utils/jupiter.js";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
@@ -94,7 +95,7 @@ export class AutoRepayBot extends AppLogger {
             this.wallet.publicKey, 
             blockhash
         );
-        const ix_computePrice = await getComputeUnitPriceIx();
+        const ix_computePrice = await getComputeUnitPriceIx(this.connection, oix_createATAs);
         oix_createATAs.unshift(ix_computeLimit, ix_computePrice);
 
         const latestBlockhash = await this.connection.getLatestBlockhash();
@@ -147,43 +148,28 @@ export class AutoRepayBot extends AppLogger {
                     }
                 );
             } catch (error) {
-                this.logger.error(`[${this.wallet?.publicKey}] Error fetching users: ${error}`);
+                this.logger.error(`Error fetching users: ${error}`);
                 continue;
             }
                 
             for (let i = 0; i < owners.length; i++) {
                 const user = users[i];
                 try {
-                    if (user === null || user === undefined) {
-                        // this.logger.warn(`[${this.wallet?.publicKey}] Failed to fetch Quartz user for ${owners[i]?.toBase58()}`);
+                    if (user === null || user === undefined) { // TODO: Fix deactivated Drift accounts
+                        // this.logger.warn(`Failed to fetch Quartz user for ${owners[i]?.toBase58()}`);
+                        continue;
+                    }
+
+                    if (await this.checkRequiresUpgrade(user)) { // TODO: Accept outdated vaults?
+                        // this.logger.warn(`User ${user.pubkey.toBase58()} requires upgrade`);
                         continue;
                     }
 
                     if (user.getHealth() === 0) {
-                        const balances = await user.getMultipleTokenBalances([...MarketIndex]);
-                        const prices = await getPrices();
-                        const {
-                            collateralPositions,
-                            loanPositions
-                        } = await getSortedPositions(balances, prices);
-
-                        if (loanPositions.length === 0) {
-                            throw new Error("No loan positions found");
-                        }
-                        if (loanPositions[0]?.value ?? 0 < MIN_LOAN_VALUE_DOLLARS) {
-                            continue; // Ignore cases where largest loan's value is less than minimum amount
-                        }
-
-                        this.attemptAutoRepay(
-                            user,
-                            loanPositions,
-                            collateralPositions,
-                            prices,
-                            balances
-                        );
+                        this.attemptAutoRepay(user);
                     };
                 } catch (error) {
-                    this.logger.error(`[${this.wallet?.publicKey}] Error processing user: ${error}`);
+                    this.logger.error(`Error processing user: ${error}`);
                 }
             }
             
@@ -191,72 +177,32 @@ export class AutoRepayBot extends AppLogger {
         }
     }
 
-    private async fetchAutoRepayParams(
-        user: QuartzUser,
-        loanPositions: Position[],
-        collateralPositions: Position[],
-        prices: Record<MarketIndex, number>,
-        balances: Record<MarketIndex, BN>
-    ): Promise<{
-        swapAmountBaseUnits: number,
-        marketIndexLoan: MarketIndex,
-        marketIndexCollateral: MarketIndex,
-        swapMode: SwapMode
-    }> {
-        // Try each token pair for a Jupiter quote, from largest to smallest values
-        for (const loanPosition of loanPositions) {
-            for (const collateralPosition of collateralPositions) {
-                if (loanPosition.marketIndex === collateralPosition.marketIndex) {
-                    continue;
-                }
-
-                const marketIndexLoan = loanPosition.marketIndex;
-                const marketIndexCollateral = collateralPosition.marketIndex;
-
-                const collateralWeight = TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber();
-                const liabilityWeight = (100 - collateralWeight) + 100; // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
-                const loanRepayValue = user.getRepayValueForTargetHealth(
-                    GOAL_HEALTH, 
-                    collateralWeight,
-                    liabilityWeight
-                );
-
-                // Ignore cases where largest loan's value is less than $0.01
-                if (loanRepayValue < MIN_LOAN_VALUE_DOLLARS) continue; 
- 
-                try {
-                    return await fetchExactOutParams(
-                        marketIndexCollateral, 
-                        marketIndexLoan, 
-                        loanRepayValue, 
-                        prices[marketIndexLoan], 
-                        prices[marketIndexCollateral], 
-                        balances[marketIndexCollateral].toNumber() 
-                    );
-                } catch {
-                    try {
-                        return await fetchExactInParams(
-                            marketIndexCollateral, 
-                            marketIndexLoan,
-                            loanRepayValue, 
-                            prices[marketIndexCollateral], 
-                            balances[marketIndexCollateral].toNumber()
-                        );
-                    } catch { } // Ignore error until no routes are found
-                }
-            }
-        }
-
-        throw new Error("No valid Jupiter quote found");
+    private async checkRequiresUpgrade(user: QuartzUser): Promise<boolean> {
+        const vaultPdaAccount = await this.connection.getAccountInfo(user.vaultPubkey);
+        if (vaultPdaAccount === null) return false;
+    
+        const OLD_VAULT_SIZE = 41;
+        return (vaultPdaAccount.data.length <= OLD_VAULT_SIZE);
     }
 
     private async attemptAutoRepay(
         user: QuartzUser,
-        loanPositions: Position[],
-        collateralPositions: Position[],
-        prices: Record<MarketIndex, number>,
-        balances: Record<MarketIndex, BN>
     ): Promise<void> {
+        const balances = await user.getMultipleTokenBalances([...MarketIndex]);
+        const prices = await getPrices();
+        const {
+            collateralPositions,
+            loanPositions
+        } = await getSortedPositions(balances, prices);
+
+        if (loanPositions.length === 0 || loanPositions[0] === undefined) {
+            throw new Error("No loan positions found");
+        }
+
+        if (loanPositions[0].value < decimalToBaseUnit(MIN_LOAN_VALUE_DOLLARS, MARKET_INDEX_USDC)) {
+            return; // Ignore cases where largest loan's value is less than minimum amount
+        }
+
         let lastError: Error | null = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
@@ -293,9 +239,8 @@ export class AutoRepayBot extends AppLogger {
             } catch (error) {
                 lastError = error as Error;
                 this.logger.warn(
-                    `[${this.wallet?.publicKey}] Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying...`
+                    `Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${lastError}`
                 );
-                console.log(lastError);
                 
                 const delay = 2_000 * (retry + 1);
                 await new Promise(resolve => setTimeout(resolve, delay));
@@ -307,8 +252,67 @@ export class AutoRepayBot extends AppLogger {
             const refreshedHealth = refreshedUser?.getHealth();
             if (refreshedHealth === undefined || refreshedHealth === 0) throw lastError;
         } catch (error) {
-            this.logger.error(`[${this.wallet?.publicKey}] Failed to execute auto-repay for ${user.pubkey.toBase58()}. Error: ${error}`);
+            this.logger.error(`Failed to execute auto-repay for ${user.pubkey.toBase58()}. Error: ${error}`);
         }
+    }
+
+    private async fetchAutoRepayParams(
+        user: QuartzUser,
+        loanPositions: Position[],
+        collateralPositions: Position[],
+        prices: Record<MarketIndex, number>,
+        balances: Record<MarketIndex, BN>
+    ): Promise<{
+        swapAmountBaseUnits: number,
+        marketIndexLoan: MarketIndex,
+        marketIndexCollateral: MarketIndex,
+        swapMode: SwapMode
+    }> {
+        // Try each token pair for a Jupiter quote, from largest to smallest values
+        for (const loanPosition of loanPositions) {
+            for (const collateralPosition of collateralPositions) {
+                if (loanPosition.marketIndex === collateralPosition.marketIndex) {
+                    continue;
+                }
+
+                const marketIndexLoan = loanPosition.marketIndex;
+                const marketIndexCollateral = collateralPosition.marketIndex;
+
+                const collateralWeight = TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber();
+                const liabilityWeight = 200 - TOKENS[marketIndexLoan].driftCollateralWeight.toNumber(); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
+                const loanRepayUsdcValue = user.getRepayUsdcValueForTargetHealth(
+                    GOAL_HEALTH, 
+                    collateralWeight,
+                    liabilityWeight
+                );
+
+                // Ignore cases where largest loan's value is less than minimum amount
+                if (loanRepayUsdcValue < decimalToBaseUnit(MIN_LOAN_VALUE_DOLLARS, MARKET_INDEX_USDC)) continue; 
+ 
+                try {
+                    return await fetchExactOutParams(
+                        marketIndexCollateral, 
+                        marketIndexLoan, 
+                        loanRepayUsdcValue, 
+                        prices[marketIndexLoan], 
+                        prices[marketIndexCollateral], 
+                        balances[marketIndexCollateral].toNumber() 
+                    );
+                } catch {
+                    try {
+                        return await fetchExactInParams(
+                            marketIndexCollateral, 
+                            marketIndexLoan,
+                            loanRepayUsdcValue, 
+                            prices[marketIndexCollateral], 
+                            balances[marketIndexCollateral].toNumber()
+                        );
+                    } catch { } // Ignore error until no routes are found
+                }
+            }
+        }
+
+        throw new Error("No valid Jupiter quote found");
     }
 
     private async executeAutoRepay (
@@ -377,20 +381,20 @@ export class AutoRepayBot extends AppLogger {
             );
         }
 
-        if (oix_createWSolAta.length > 0 && lamportsToWrap > 0) {
+        if (lamportsToWrap > 0) {
             oix_wrapSol.push(
                 SystemProgram.transfer({
                     fromPubkey: this.wallet.publicKey,
-                    toPubkey: this.splWallets[marketIndexCollateral],
+                    toPubkey: this.splWallets[MARKET_INDEX_SOL],
                     lamports: lamportsToWrap
                 }),
-                createSyncNativeInstruction(this.splWallets[marketIndexCollateral])
+                createSyncNativeInstruction(this.splWallets[MARKET_INDEX_SOL])
             );
         }
 
         // Warning to keep gas funds balance
         if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
-            this.logger.error(`[${this.wallet?.publicKey}] Low SOL balance, please add more funds`);
+            this.logger.error(`Low SOL balance, please add more funds. Bot address: ${this.wallet?.publicKey}`);
         }
 
         // Build instructions
@@ -413,11 +417,11 @@ export class AutoRepayBot extends AppLogger {
             instructions, 
             [...jupiterLookupTables, ...quartzLookupTables]
         );
-
         transaction.sign([this.wallet]);
         const signature = await retryWithBackoff(
             async () => this.connection.sendRawTransaction(transaction.serialize())
         );
+
         return signature;
     }
 
@@ -436,7 +440,7 @@ export class AutoRepayBot extends AppLogger {
             const collateralBank = await this.marginfiClient.getBankByMint(TOKENS[marketIndexCollateral].mint);
             if (!collateralBank) throw new Error("Collateral bank for flash loan not found");
 
-            const ix_computePrice = await getComputeUnitPriceIx();
+            const ix_computePrice = await getComputeUnitPriceIx(this.connection, instructions);
             const { instructions: ix_borrow } = await this.marginfiAccount.makeBorrowIx(amountCollateralDecimal, collateralBank.address, {
                 createAtas: false,
                 wrapAndUnwrapSol: false
@@ -469,7 +473,7 @@ export class AutoRepayBot extends AppLogger {
             latestBlockhash.blockhash,
             lookupTables 
         );
-        const ix_computePrice = await getComputeUnitPriceIx();
+        const ix_computePrice = await getComputeUnitPriceIx(this.connection, instructions);
         instructions.unshift(ix_computeLimit, ix_computePrice);
 
         const messageV0 = new TransactionMessage({

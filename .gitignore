@@ -9,6 +9,8 @@ lerna-debug.log*
 
 yarn.lock
 
+.yalc/
+
 build/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)

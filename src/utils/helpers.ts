@@ -1,107 +1,15 @@
-import { type Connection, ComputeBudgetProgram, PublicKey, VersionedTransaction, TransactionMessage } from "@solana/web3.js";
-import { SwapMode, type QuoteResponse } from "@jup-ag/api";
-import { baseUnitToDecimal, decimalToBaseUnit, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
+import { SwapMode } from "@jup-ag/api";
+import { baseUnitToDecimal, decimalToBaseUnit, MARKET_INDEX_USDC, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
+import type { Connection, PublicKey } from "@solana/web3.js";
 import type { PythResponse } from "../types/Pyth.interface.js";
 import type { Position } from "../types/Position.interface.js";
-import { DEFAULT_COMPUTE_UNIT_LIMIT, JUPITER_SLIPPAGE_BPS } from "../config/constants.js";
-import { AddressLookupTableAccount, TransactionInstruction } from "@solana/web3.js";
-
-export async function getJupiterSwapQuote(
-    swapMode: SwapMode,
-    inputMint: PublicKey, 
-    outputMint: PublicKey, 
-    amount: number,
-    slippageBps: number
-) {
-    const quoteEndpoint = 
-        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
-    const response = await fetch(quoteEndpoint);
-    if (!response.ok) throw new Error("Could not fetch Jupiter quote");
-    
-    const body = await response.json() as QuoteResponse;
-    return body;
-}
-
-export async function makeJupiterIx(
-    connection: Connection,
-    jupiterQuote: QuoteResponse,
-    address: PublicKey
-): Promise<{
-    ix: TransactionInstruction,
-    lookupTables: AddressLookupTableAccount[]
-}> {
-    const instructions = await (
-        await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                jupiterQuote,
-                userPublicKey: address.toBase58(),
-            })
-        })
-        // biome-ignore lint: Allow any for Jupiter API response
-    ).json() as any;
-    
-    if (instructions.error) {
-        throw new Error(`Failed to get swap instructions: ${instructions.error}`);
-    }
-
-    const {
-        swapInstruction,
-        addressLookupTableAddresses
-    } = instructions;
-
-    // biome-ignore lint: Allow any for Jupiter API response
-    const deserializeInstruction = (instruction: any) => {
-        return new TransactionInstruction({
-            programId: new PublicKey(instruction.programId),
-            // biome-ignore lint: Allow any for Jupiter API response
-            keys: instruction.accounts.map((key: any) => ({
-                pubkey: new PublicKey(key.pubkey),
-                isSigner: key.isSigner,
-                isWritable: key.isWritable,
-            })),
-            data: Buffer.from(instruction.data, "base64"),
-        });
-    };
-    
-    const getAddressLookupTableAccounts = async (
-        keys: string[]
-    ): Promise<AddressLookupTableAccount[]> => {
-        const addressLookupTableAccountInfos =
-        await connection.getMultipleAccountsInfo(
-            keys.map((key) => new PublicKey(key))
-        );
-    
-        return addressLookupTableAccountInfos.reduce((acc, accountInfo, index) => {
-        const addressLookupTableAddress = keys[index];
-        if (accountInfo && addressLookupTableAddress) {
-            const addressLookupTableAccount = new AddressLookupTableAccount({
-            key: new PublicKey(addressLookupTableAddress),
-            state: AddressLookupTableAccount.deserialize(accountInfo.data),
-            });
-            acc.push(addressLookupTableAccount);
-        }
-    
-        return acc;
-        }, new Array<AddressLookupTableAccount>());
-    };
-    
-    const addressLookupTableAccounts = await getAddressLookupTableAccounts(addressLookupTableAddresses);
-
-
-    return {
-        ix: deserializeInstruction(swapInstruction),
-        lookupTables: addressLookupTableAccounts
-    };
-}
+import { JUPITER_SLIPPAGE_BPS } from "../config/constants.js";
+import { getJupiterSwapQuote } from "./jupiter.js";
 
 export async function fetchExactOutParams(
     marketIndexCollateral: MarketIndex,
     marketIndexLoan: MarketIndex,
-    loanRepayValue: number,
+    loanRepayUsdcValue: number,
     loanPrice: number,
     collateralPrice: number,
     collateralBalance: number,
@@ -111,6 +19,7 @@ export async function fetchExactOutParams(
     const loanEquivalentDecimal = (collateralBalanceValue / loanPrice) * (1 - JUPITER_SLIPPAGE_BPS / 10_000);
     const loanEquivalentBaseUnits = decimalToBaseUnit(loanEquivalentDecimal, marketIndexLoan);
 
+    const loanRepayValue = baseUnitToDecimal(loanRepayUsdcValue, MARKET_INDEX_USDC);
     const targetRepayAmountLoanBaseUnits = decimalToBaseUnit(loanRepayValue / loanPrice, marketIndexLoan);
     
     const repayAmountLoan = Math.min(targetRepayAmountLoanBaseUnits, loanEquivalentBaseUnits);
@@ -134,10 +43,11 @@ export async function fetchExactOutParams(
 export async function fetchExactInParams(
     marketIndexCollateral: MarketIndex,
     marketIndexLoan: MarketIndex,
-    loanRepayValue: number,
+    loanRepayUsdcValue: number,
     collateralPrice: number,
     collateralBalance: number
 ) {
+    const loanRepayValue = baseUnitToDecimal(loanRepayUsdcValue, MARKET_INDEX_USDC);
     const targetRepayAmountCollateralDecimal = loanRepayValue / collateralPrice;
     const targetRepayAmountCollateralBaseUnits = decimalToBaseUnit(targetRepayAmountCollateralDecimal, marketIndexCollateral);
     const repayAmountCollateral = Math.min(targetRepayAmountCollateralBaseUnits, collateralBalance);
@@ -240,10 +150,21 @@ export async function getSortedPositions(
     loanPositions: Position[]
 }> { 
     const values = Object.fromEntries(
-        Object.entries(balances).map(([index, balance]) => [
-            index,
-            prices[Number(index) as MarketIndex] * balance.toNumber()
-        ])
+        Object.entries(balances).map(([index, balance]) =>{
+            const marketIndex = Number(index) as MarketIndex;
+            const balanceDecimal = baseUnitToDecimal(balance.toNumber(), marketIndex);
+            const valueDollars = prices[marketIndex] * balanceDecimal;
+            let valueUsdc = decimalToBaseUnit(valueDollars, MARKET_INDEX_USDC);
+
+            // 1 base unit of another stablecoin may convert to less than 1 base unit of USDC due to price fluctuations
+            if (valueDollars > 0 && valueUsdc === 0) {
+                valueUsdc = 1;
+            } else if (valueDollars < 0 && valueUsdc === 0) {
+                valueUsdc = -1;
+            }
+
+            return [ marketIndex, valueUsdc ];
+        })
     ) as Record<MarketIndex, number>;
 
     const collateralPositions = Object.entries(values)
@@ -299,54 +220,4 @@ export async function getRepayMarketIndices(user: QuartzUser) {
         marketIndexLoan: lowestBalance.index,
         marketIndexCollateral: highestBalance.index
     };
-}
-
-export async function getComputeUnitPrice() {
-    // TODO: Calculate actual fee
-    return 1_250_000;
-};
-
-export async function getComputeUnitPriceIx() {
-    const computeUnitPrice = await getComputeUnitPrice();
-    return ComputeBudgetProgram.setComputeUnitPrice({
-        microLamports: computeUnitPrice,
-    });
-}
-
-export async function getComputeUnitLimit(
-    connection: Connection,
-    instructions: TransactionInstruction[],
-    address: PublicKey,
-    blockhash: string,
-    lookupTables: AddressLookupTableAccount[] = []
-) {
-    const messageV0 = new TransactionMessage({
-        payerKey: address,
-        recentBlockhash: blockhash,
-        instructions: instructions
-    }).compileToV0Message(lookupTables);
-    const simulation = await retryWithBackoff(
-        async () => connection.simulateTransaction(
-            new VersionedTransaction(messageV0)
-        )
-    );
-
-    const estimatedComputeUnits = simulation.value.unitsConsumed;
-    const computeUnitLimit = estimatedComputeUnits 
-        ? Math.ceil(estimatedComputeUnits * 1.3) 
-        : DEFAULT_COMPUTE_UNIT_LIMIT;
-    return computeUnitLimit;
-}
-
-export async function getComputerUnitLimitIx(
-    connection: Connection,
-    instructions: TransactionInstruction[],
-    address: PublicKey,
-    blockhash: string,
-    lookupTables: AddressLookupTableAccount[] = []
-) {
-    const computeUnitLimit = await getComputeUnitLimit(connection, instructions, address, blockhash, lookupTables);
-    return ComputeBudgetProgram.setComputeUnitLimit({
-        units: computeUnitLimit,
-    });
 }
