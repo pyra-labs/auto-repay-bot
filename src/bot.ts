@@ -165,8 +165,6 @@ export class AutoRepayBot extends AppLogger {
                         continue;
                     }
 
-                    console.log()
-
                     if (user.getHealth() === 0) {
                         this.attemptAutoRepay(user);
                     };
@@ -280,8 +278,8 @@ export class AutoRepayBot extends AppLogger {
                 const marketIndexLoan = loanPosition.marketIndex;
                 const marketIndexCollateral = collateralPosition.marketIndex;
 
-                const collateralWeight = TOKENS[marketIndexCollateral].driftCollateralWeight.toNumber();
-                const liabilityWeight = 200 - TOKENS[marketIndexLoan].driftCollateralWeight.toNumber(); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
+                const collateralWeight = TOKENS[marketIndexCollateral].driftInitialCollateralWeight.toNumber();
+                const liabilityWeight = 200 - TOKENS[marketIndexLoan].driftInitialCollateralWeight.toNumber(); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
                 const loanRepayUsdcValue = user.getRepayUsdcValueForTargetHealth(
                     GOAL_HEALTH, 
                     collateralWeight,
@@ -420,8 +418,11 @@ export class AutoRepayBot extends AppLogger {
             [...jupiterLookupTables, ...quartzLookupTables]
         );
         transaction.sign([this.wallet]);
+
         const signature = await retryWithBackoff(
-            async () => this.connection.sendRawTransaction(transaction.serialize())
+            async () => this.connection.sendRawTransaction(transaction.serialize(), {
+                skipPreflight: true
+            })
         );
 
         return signature;

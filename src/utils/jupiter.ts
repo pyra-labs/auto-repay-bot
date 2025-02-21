@@ -9,7 +9,7 @@ export async function getJupiterSwapQuote(
     slippageBps: number
 ) {
     const quoteEndpoint = 
-        `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
+        `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
     const response = await fetch(quoteEndpoint);
     if (!response.ok) throw new Error("Could not fetch Jupiter quote");
     
