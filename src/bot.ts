@@ -165,6 +165,12 @@ export class AutoRepayBot extends AppLogger {
                         continue;
                     }
 
+                    try {
+                        console.log(user.getHealth());
+                    } catch (error) {
+                        this.logger.error(`Error fetching health for ${user.pubkey.toBase58()}: ${error}`);
+                    }
+
                     if (user.getHealth() === 0) {
                         this.attemptAutoRepay(user);
                     };
