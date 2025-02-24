@@ -230,7 +230,8 @@ export class AutoRepayBot extends AppLogger {
                 await retryWithBackoff(
                     async () => {
                         const latestBlockhash = await this.connection.getLatestBlockhash();
-                        await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
+                        const tx = await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
+                        if (tx.value.err) throw new Error(`Tx passed preflight but failed on-chain: ${signature}`);
                     }
                 );
 
@@ -394,7 +395,7 @@ export class AutoRepayBot extends AppLogger {
 
         // Warning to keep gas funds balance
         if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
-            this.logger.error(`Low SOL balance, please add more funds. Bot address: ${this.wallet?.publicKey}`);
+            this.sendEmail("Low SOL balance", `Low SOL balance, please add more funds. Bot address: ${this.wallet?.publicKey}`);
         }
 
         // Build instructions
@@ -420,9 +421,7 @@ export class AutoRepayBot extends AppLogger {
         transaction.sign([this.wallet]);
 
         const signature = await retryWithBackoff(
-            async () => this.connection.sendRawTransaction(transaction.serialize(), {
-                skipPreflight: true
-            })
+            async () => this.connection.sendRawTransaction(transaction.serialize())
         );
 
         return signature;
