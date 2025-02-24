@@ -9,8 +9,8 @@
     "lint": "yarn biome lint --write",
     "build": "yarn install && yarn lint && tsc -p tsconfig.json",
     "start": "yarn build && node dist/index.js",
-    "docker": "docker build -t auto-repay-bot .",
-    "docker:run": "docker run --env-file ./.env auto-repay-bot"
+    "docker": "docker build --platform linux/amd64 -t auto-repay-bot .",
+    "docker:run": "docker run --platform linux/amd64 --env-file ./.env auto-repay-bot"
   },
   "repository": {
     "type": "git",
