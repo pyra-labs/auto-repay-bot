@@ -28,7 +28,7 @@ export class AutoRepayBot extends AppLogger {
     constructor() {
         super({
             name: "Auto-Repay Bot",
-            dailyErrorCacheTimeMs: 1000 * 60 * 60 // 1 hour
+            dailyErrorCacheTimeMs: 1000 * 60 * 15 // 15 minutes
         });
 
         this.connection = new Connection(config.RPC_URL);
@@ -231,11 +231,16 @@ export class AutoRepayBot extends AppLogger {
                     async () => {
                         const latestBlockhash = await this.connection.getLatestBlockhash();
                         const tx = await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
+
+                        if (!this.wallet) throw new Error("Wallet is not initialized");
+                        await this.checkRemainingBalance(this.wallet.publicKey);
+
                         if (tx.value.err) throw new Error(`Tx passed preflight but failed on-chain: ${signature}`);
                     }
                 );
 
                 this.logger.info(`Executed auto-repay for ${user.pubkey.toBase58()}, signature: ${signature}`);
+
                 return;
             } catch (error) {
                 lastError = error as Error;
@@ -393,11 +398,6 @@ export class AutoRepayBot extends AppLogger {
             );
         }
 
-        // Warning to keep gas funds balance
-        if (startingLamportsBalance < MIN_LAMPORTS_BALANCE) {
-            this.sendEmail("Low SOL balance", `Low SOL balance, please add more funds. Bot address: ${this.wallet?.publicKey}`);
-        }
-
         // Build instructions
         const {
             ix: ix_jupiter,
@@ -485,4 +485,15 @@ export class AutoRepayBot extends AppLogger {
         }).compileToV0Message(lookupTables);
         return new VersionedTransaction(messageV0);
     }
+
+    private async checkRemainingBalance(address: PublicKey): Promise<void> {
+        const remainingLamports = await this.connection.getBalance(address);
+        if (remainingLamports < MIN_LAMPORTS_BALANCE) {
+            this.sendEmail(
+                "AUTO_REPAY_BOT balance is low", 
+                `Auto-repay bot balance is ${remainingLamports}, please add more SOL to ${address.toBase58()}`
+            );
+        }
+    }
+    
 }
