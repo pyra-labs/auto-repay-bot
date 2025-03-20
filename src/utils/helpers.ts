@@ -1,9 +1,9 @@
 import { SwapMode } from "@jup-ag/api";
 import { baseUnitToDecimal, decimalToBaseUnit, MARKET_INDEX_USDC, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
-import type { Connection, PublicKey } from "@solana/web3.js";
+import type { Connection, PublicKey, SendTransactionError } from "@solana/web3.js";
 import type { PythResponse } from "../types/Pyth.interface.js";
 import type { Position } from "../types/Position.interface.js";
-import { JUPITER_SLIPPAGE_BPS } from "../config/constants.js";
+import { JUPITER_SLIPPAGE_BPS, SLIPPAGE_ERROR_CODES } from "../config/constants.js";
 import { getJupiterSwapQuote } from "./jupiter.js";
 
 export async function fetchExactOutParams(
@@ -220,4 +220,16 @@ export async function getRepayMarketIndices(user: QuartzUser) {
         marketIndexLoan: lowestBalance.index,
         marketIndexCollateral: highestBalance.index
     };
+}
+
+export async function isSlippageError(error: SendTransactionError, connection: Connection) {
+    const baseError = "Program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 failed: custom program error: ";
+    const slippageErrors = SLIPPAGE_ERROR_CODES.map(code => `${baseError}${code}`);
+    const logs = await error.getLogs(connection);
+
+    return logs.some(
+        log => slippageErrors.some(
+            error => log.includes(error) // Check if any slippage errors are contained in any logs
+        )
+    );
 }

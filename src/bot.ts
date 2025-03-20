@@ -1,9 +1,9 @@
-import { Connection, Keypair, type PublicKey, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
-import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams } from "./utils/helpers.js";
+import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
@@ -203,7 +203,7 @@ export class AutoRepayBot extends AppLogger {
             return; // Ignore cases where largest loan's value is less than minimum amount
         }
 
-        let lastError: Error | null = null;
+        let lastError: unknown = null;
         for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
             try {
                 const { 
@@ -243,7 +243,7 @@ export class AutoRepayBot extends AppLogger {
 
                 return;
             } catch (error) {
-                lastError = error as Error;
+                lastError = error;
                 this.logger.warn(
                     `Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${lastError}`
                 );
@@ -258,7 +258,15 @@ export class AutoRepayBot extends AppLogger {
             const refreshedHealth = refreshedUser?.getHealth();
             if (refreshedHealth === undefined || refreshedHealth === 0) throw lastError;
         } catch (error) {
-            this.logger.error(`Failed to execute auto-repay for ${user.pubkey.toBase58()}. Error: ${error}`);
+            let slippageError = "";
+            if (
+                lastError instanceof SendTransactionError
+                && await isSlippageError(lastError, this.connection)
+            ) {
+                slippageError = " [Slippage Exceeded]";
+            }
+            
+            this.logger.error(`Failed to execute auto-repay for ${user.pubkey.toBase58()}.${slippageError} Error: ${error}`);
         }
     }
 
