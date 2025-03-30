@@ -236,7 +236,8 @@ export class AutoRepayBot extends AppLogger {
                         await this.checkRemainingBalance(this.wallet.publicKey);
 
                         if (tx.value.err) throw new Error(`Tx passed preflight but failed on-chain: ${signature}`);
-                    }
+                    },
+                    1
                 );
 
                 this.logger.info(`Executed auto-repay for ${user.pubkey.toBase58()}, signature: ${signature}`);
