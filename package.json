@@ -23,7 +23,6 @@
   },
   "homepage": "https://github.com/quartz-labs/auto-repay-bot#readme",
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "3.696.0",
     "@jup-ag/api": "6.0.29",
     "@mrgnlabs/marginfi-client-v2": "4.0.4",
     "@mrgnlabs/mrgn-common": "1.8.0",

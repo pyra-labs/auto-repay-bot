@@ -1,12 +1,10 @@
-import { Connection, Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { Connection, type Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
 import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError } from "./utils/helpers.js";
 import config from "./config/config.js";
-import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
-import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, getComputerUnitLimitIx } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { SwapMode } from "@jup-ag/api";
@@ -18,7 +16,7 @@ export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
 
     private connection: Connection;
-    private wallet: Keypair | undefined;
+    private wallet: Keypair;
     private splWallets = {} as Record<MarketIndex, PublicKey>;
 
     private quartzClient: QuartzClient | undefined;
@@ -32,50 +30,17 @@ export class AutoRepayBot extends AppLogger {
         });
 
         this.connection = new Connection(config.RPC_URL);
-        
+        this.wallet = config.LIQUIDATOR_KEYPAIR;
+
         this.initPromise = this.initialize();
     }
 
     private async initialize(): Promise<void> {
-        await this.initWallet();
         await this.initATAs();
         await this.initClients();
     }
 
-    private async initWallet(): Promise<void> {
-        if (!config.USE_AWS) {
-            if (!config.WALLET_KEYPAIR) throw new Error("Wallet keypair is not set");
-            this.wallet = Keypair.fromSecretKey(config.WALLET_KEYPAIR);
-            return;
-        }
-
-        if (!config.AWS_REGION || !config.AWS_SECRET_NAME) throw new Error("AWS credentials are not set");
-
-        const client = new SecretsManagerClient({ region: config.AWS_REGION });
-
-        try {
-            const response = await client.send(
-                new GetSecretValueCommand({
-                    SecretId: config.AWS_SECRET_NAME,
-                    VersionStage: "AWSCURRENT",
-                })
-            );
-
-            const secretString = response.SecretString;
-            if (!secretString) throw new Error("Secret string is not set");
-
-            const secret = JSON.parse(secretString);
-            const secretArray = new Uint8Array(JSON.parse(secret.liquidatorSecret));
-
-            this.wallet = Keypair.fromSecretKey(secretArray);
-        } catch (error) {
-            throw new Error(`Failed to get secret key from AWS: ${error}`);
-        }
-    }
-
     private async initATAs(): Promise<void> {
-        if (!this.wallet) throw new Error("Wallet is not initialized");
-
         const oix_createATAs = [];
         for (const [marketIndex, token] of Object.entries(TOKENS)) {
             const tokenProgram = await getTokenProgram(this.connection, token.mint);
@@ -113,8 +78,6 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async initClients(): Promise<void> {
-        if (!this.wallet) throw new Error("Wallet is not initialized");
-
         this.quartzClient = await QuartzClient.fetchClient(this.connection);
 
         this.marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), new NodeWallet(this.wallet), this.connection);
@@ -128,7 +91,6 @@ export class AutoRepayBot extends AppLogger {
 
     async start(): Promise<void> {
         await this.initPromise;
-        if (!this.wallet || !this.quartzClient) throw new Error("Could not initialize correctly");
         this.logger.info(`Auto-Repay Bot initialized with address ${this.wallet.publicKey}`);
 
         setInterval(() => {
@@ -232,7 +194,6 @@ export class AutoRepayBot extends AppLogger {
                         const latestBlockhash = await this.connection.getLatestBlockhash();
                         const tx = await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
 
-                        if (!this.wallet) throw new Error("Wallet is not initialized");
                         await this.checkRemainingBalance(this.wallet.publicKey);
 
                         if (tx.value.err) throw new Error(`Tx passed preflight but failed on-chain: ${signature}`);
@@ -337,7 +298,7 @@ export class AutoRepayBot extends AppLogger {
         marketIndexCollateral: MarketIndex,
         swapMode: SwapMode
     ): Promise<string> {
-        if (!this.wallet || !this.splWallets[marketIndexLoan] || !this.splWallets[marketIndexCollateral]) {
+        if (!this.splWallets[marketIndexLoan] || !this.splWallets[marketIndexCollateral]) {
             throw new Error("AutoRepayBot is not initialized");
         }
 
@@ -352,7 +313,6 @@ export class AutoRepayBot extends AppLogger {
         const startingCollateralBalancePromise = getTokenAccountBalance(this.connection, this.splWallets[marketIndexCollateral]);
         const startingLamportsBalancePromise = retryWithBackoff(
             async () => {
-                if (!this.wallet) throw new Error("Wallet is not initialized");
                 return await this.connection.getBalance(this.wallet.publicKey);
             }
         );
@@ -442,7 +402,7 @@ export class AutoRepayBot extends AppLogger {
         instructions: TransactionInstruction[],
         lookupTables: AddressLookupTableAccount[]
     ): Promise<VersionedTransaction> {
-        if (!this.wallet || !this.marginfiAccount || !this.marginfiClient) {
+        if (!this.marginfiAccount || !this.marginfiClient) {
             throw new Error("AutoRepayBot is not initialized");
         }
 
