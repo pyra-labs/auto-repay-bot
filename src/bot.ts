@@ -244,6 +244,8 @@ export class AutoRepayBot extends AppLogger {
         marketIndexCollateral: MarketIndex,
         swapMode: SwapMode
     }> {
+        if (!this.quartzClient) throw new Error("Quartz client is not initialized");
+
         // Try each token pair for a Jupiter quote, from largest to smallest values
         for (const loanPosition of loanPositions) {
             for (const collateralPosition of collateralPositions) {
@@ -254,8 +256,8 @@ export class AutoRepayBot extends AppLogger {
                 const marketIndexLoan = loanPosition.marketIndex;
                 const marketIndexCollateral = collateralPosition.marketIndex;
 
-                const collateralWeight = TOKENS[marketIndexCollateral].driftInitialCollateralWeight.toNumber();
-                const liabilityWeight = 200 - TOKENS[marketIndexLoan].driftInitialCollateralWeight.toNumber(); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
+                const collateralWeight = await this.quartzClient.getCollateralWeight(marketIndexCollateral);
+                const liabilityWeight = 200 - await this.quartzClient.getCollateralWeight(marketIndexLoan); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
                 const loanRepayUsdcValue = user.getRepayUsdcValueForTargetHealth(
                     GOAL_HEALTH, 
                     collateralWeight,
