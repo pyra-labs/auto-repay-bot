@@ -258,7 +258,7 @@ export class AutoRepayBot extends AppLogger {
 
                 const collateralWeight = await this.quartzClient.getCollateralWeight(marketIndexCollateral);
                 const liabilityWeight = 200 - await this.quartzClient.getCollateralWeight(marketIndexLoan); // Liability weight is the inverse of collateralWeight (eg: 80% => 120%)
-                const loanRepayUsdcValue = user.getRepayUsdcValueForTargetHealth(
+                const loanRepayUsdcValue = await user.getRepayUsdcValueForTargetHealth(
                     GOAL_HEALTH, 
                     collateralWeight,
                     liabilityWeight
