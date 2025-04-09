@@ -10,7 +10,7 @@ const envSchema = z.object({
         .transform((str) => {
             try {
                 const trimmed = str.trim();
-                console.log(`Raw key length: ${trimmed.length}, trimmed length: ${trimmed.length}`);
+                console.log(`Raw key length: ${str.length}, trimmed length: ${trimmed.length}`);
                 const decoded = bs58.decode(trimmed);
                 return Keypair.fromSecretKey(decoded);
             } catch (error) {
