@@ -9,10 +9,7 @@ const envSchema = z.object({
     LIQUIDATOR_KEYPAIR: z.string()
         .transform((str) => {
             try {
-                const trimmed = str.trim();
-                console.log(`Raw key length: ${str.length}, trimmed length: ${trimmed.length}`);
-                const decoded = bs58.decode(trimmed);
-                return Keypair.fromSecretKey(decoded);
+                return Keypair.fromSecretKey(bs58.decode(str));
             } catch (error) {
                 console.error(error);
                 throw new Error("Invalid LIQUIDATOR_KEYPAIR: must be a valid base58-encoded Solana private key");
