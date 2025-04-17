@@ -107,7 +107,8 @@ export class AutoRepayBot extends AppLogger {
                         const owners = await this.quartzClient.getAllQuartzAccountOwnerPubkeys();
                         const users = await this.quartzClient.getMultipleQuartzAccounts(owners);
                         return [owners, users];
-                    }
+                    },
+                    1
                 );
             } catch (error) {
                 this.logger.error(`Error fetching users: ${error}`);
@@ -122,7 +123,7 @@ export class AutoRepayBot extends AppLogger {
                         continue;
                     }
 
-                    if (await this.checkRequiresUpgrade(user)) { // TODO: Accept outdated vaults?
+                    if (await this.checkRequiresUpgrade(user)) {
                         // this.logger.warn(`User ${user.pubkey.toBase58()} requires upgrade`);
                         continue;
                     }
