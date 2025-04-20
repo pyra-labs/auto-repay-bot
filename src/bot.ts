@@ -5,7 +5,7 @@ import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_I
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
 import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError } from "./utils/helpers.js";
 import config from "./config/config.js";
-import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, getComputerUnitLimitIx } from "@quartz-labs/sdk";
+import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, getComputerUnitLimitIx, ZERO, buildTransaction } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { SwapMode } from "@jup-ag/api";
 import type { Position } from "./types/Position.interface.js";
@@ -129,7 +129,7 @@ export class AutoRepayBot extends AppLogger {
                     }
 
                     if (user.getHealth() === 0) {
-                        this.attemptAutoRepay(user);
+                        this.processUser(user);
                     };
                 } catch (error) {
                     this.logger.error(`Error processing user: ${error}`);
@@ -148,9 +148,68 @@ export class AutoRepayBot extends AppLogger {
         return (vaultPdaAccount.data.length <= OLD_VAULT_SIZE);
     }
 
+    private async processUser(user: QuartzUser): Promise<void> {
+        try {
+            if (!this.quartzClient) throw new Error("Quartz client is not initialized");
+            let hasDepositAddressBalance = false;
+            const depositAddressBalances = await user.getAllDepositAddressBalances();
+
+            const depositPromises = [];
+            for (const marketIndex of MarketIndex) {
+                const balance: BN = depositAddressBalances[marketIndex];
+                if (balance.gt(ZERO)) {
+                    hasDepositAddressBalance = true;
+                    depositPromises.push(this.fulfilDeposit(user, marketIndex));
+                }
+            }
+            await Promise.all(depositPromises);
+        
+            if (!hasDepositAddressBalance) {
+                await this.attemptAutoRepay(user);
+                return;
+            }
+
+            // If some deposits have been filled, refresh to check if health is still 0
+            const refreshedUser = await this.quartzClient.getQuartzAccount(user.pubkey);
+            if (!refreshedUser) throw new Error("User not found while refreshing");
+            if (refreshedUser.getHealth() === 0) {
+                await this.attemptAutoRepay(refreshedUser);
+            }
+        } catch (error) {
+            this.logger.error(`Error processing user: ${error} - ${JSON.stringify(user)}`);
+        }
+    }
+
+    private async fulfilDeposit(user: QuartzUser, marketIndex: MarketIndex): Promise<void> {
+        const {
+            ixs,
+            lookupTables,
+            signers
+        } = await user.makeFulfilDepositIx(
+            marketIndex,
+            this.wallet.publicKey
+        )
+        const transaction = await buildTransaction(
+            this.connection,
+            ixs,
+            this.wallet.publicKey,
+            lookupTables
+        );
+        transaction.sign([...signers]);
+
+        const latestBlockhash = await this.connection.getLatestBlockhash();
+        const signature = await retryWithBackoff(
+            async () => this.connection.sendRawTransaction(transaction.serialize())
+        );
+        await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
+
+        this.logger.info(`Fulfil deposit for ${user.pubkey.toBase58()} (market index ${marketIndex}), signature: ${signature}`);
+    }
+
     private async attemptAutoRepay(
         user: QuartzUser,
     ): Promise<void> {
+        if (!this.quartzClient) throw new Error("Quartz client is not initialized");
         const balances = await user.getMultipleTokenBalances([...MarketIndex]);
         const prices = await getPrices();
         const {
@@ -217,7 +276,7 @@ export class AutoRepayBot extends AppLogger {
         }
 
         try {
-            const refreshedUser = await this.quartzClient?.getQuartzAccount(user.pubkey);
+            const refreshedUser = await this.quartzClient.getQuartzAccount(user.pubkey);
             const refreshedHealth = refreshedUser?.getHealth();
             if (refreshedHealth === undefined || refreshedHealth === 0) throw lastError;
         } catch (error) {
