@@ -185,7 +185,7 @@ export class AutoRepayBot extends AppLogger {
             ixs,
             lookupTables,
             signers
-        } = await user.makeFulfilDepositIx(
+        } = await user.makeFulfilDepositIxs(
             marketIndex,
             this.wallet.publicKey
         )
