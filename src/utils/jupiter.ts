@@ -9,7 +9,7 @@ export async function getJupiterSwapQuote(
     slippageBps: number
 ) {
     const quoteEndpoint = 
-        `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
+        `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint.toBase58()}&outputMint=${outputMint.toBase58()}&amount=${amount}&slippageBps=${slippageBps}&swapMode=${swapMode}&onlyDirectRoutes=true`;
     const response = await fetch(quoteEndpoint);
     if (!response.ok) throw new Error("Could not fetch Jupiter quote");
     
@@ -26,7 +26,7 @@ export async function makeJupiterIx(
     lookupTables: AddressLookupTableAccount[]
 }> {
     const instructions = await (
-        await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+        await fetch('https://lite-api.jup.ag/swap/v1/swap-instructions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
