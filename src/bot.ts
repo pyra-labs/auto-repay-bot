@@ -1,4 +1,4 @@
-import { Connection, type Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { type Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -11,11 +11,12 @@ import type { SwapMode } from "@jup-ag/api";
 import type { Position } from "./types/Position.interface.js";
 import { AppLogger } from "@quartz-labs/logger";
 import { getJupiterSwapQuote, makeJupiterIx } from "./utils/jupiter.js";
+import AdvancedConnection from "@quartz-labs/connection";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
 
-    private connection: Connection;
+    private connection: AdvancedConnection;
     private wallet: Keypair;
     private splWallets = {} as Record<MarketIndex, PublicKey>;
 
@@ -29,7 +30,7 @@ export class AutoRepayBot extends AppLogger {
             dailyErrorCacheTimeMs: 1000 * 60 * 15 // 15 minutes
         });
 
-        this.connection = new Connection(config.RPC_URL);
+        this.connection = new AdvancedConnection(config.RPC_URLS);
         this.wallet = config.LIQUIDATOR_KEYPAIR;
 
         this.initPromise = this.initialize();
@@ -78,7 +79,9 @@ export class AutoRepayBot extends AppLogger {
     }
 
     private async initClients(): Promise<void> {
-        this.quartzClient = await QuartzClient.fetchClient(this.connection);
+        this.quartzClient = await QuartzClient.fetchClient({
+            connection: this.connection
+        });
 
         this.marginfiClient = await MarginfiClient.fetch(getMarginfiConfig(), new NodeWallet(this.wallet), this.connection);
         const marginfiAccounts = await this.marginfiClient.getMarginfiAccountsForAuthority(this.wallet.publicKey);
