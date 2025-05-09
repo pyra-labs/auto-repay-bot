@@ -28,7 +28,7 @@
     "@mrgnlabs/mrgn-common": "2.0.2",
     "@quartz-labs/connection": "^2.0.0",
     "@quartz-labs/logger": "^1.1.1",
-    "@quartz-labs/sdk": "0.19.0",
+    "@quartz-labs/sdk": "0.19.1",
     "@solana/spl-token": "0.3.11",
     "@solana/web3.js": "1.95.8",
     "@types/node": "22.10.0",
