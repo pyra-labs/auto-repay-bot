@@ -448,14 +448,14 @@
     snake-case "^3.0.4"
     spok "^1.4.3"
 
-"@mrgnlabs/marginfi-client-v2@6.0.2":
-  version "6.0.2"
-  resolved "https://registry.yarnpkg.com/@mrgnlabs/marginfi-client-v2/-/marginfi-client-v2-6.0.2.tgz#175e364bc95d35ba16d88d7d2180f2869dba29cd"
-  integrity sha512-Ja60Q17P5xSkVPpeJV7fb1klWBygMU+JgjzwvXohZY5N05mYfuqTsL6tPrxBUHU5FrO1kGIL/qjJhBowmzj+tg==
+"@mrgnlabs/marginfi-client-v2@6.1.0":
+  version "6.1.0"
+  resolved "https://registry.yarnpkg.com/@mrgnlabs/marginfi-client-v2/-/marginfi-client-v2-6.1.0.tgz#53b30bacd16ba1347e7c42c53d9a45d7b303f199"
+  integrity sha512-8T93tWsp6BbFyKocQBTxaJ1RhslnseNtMO+TWPySpr8iNaUmFax15fuA6Ml/q/wgjZHu2sqNPy501UeDnCb/kw==
   dependencies:
     "@coral-xyz/anchor" "^0.30.1"
     "@coral-xyz/borsh" "^0.30.1"
-    "@mrgnlabs/mrgn-common" "2.0.2"
+    "@mrgnlabs/mrgn-common" "2.0.3"
     "@pythnetwork/pyth-solana-receiver" "^0.8.0"
     "@solana/spl-token" "^0.1.8"
     "@solana/wallet-adapter-base" "^0.9.23"
@@ -468,10 +468,10 @@
     decimal.js "^10.4.3"
     superstruct "^1.0.4"
 
-"@mrgnlabs/mrgn-common@2.0.2":
-  version "2.0.2"
-  resolved "https://registry.yarnpkg.com/@mrgnlabs/mrgn-common/-/mrgn-common-2.0.2.tgz#4b96de41a7c8bd14e7e8c756793717e4cbbae8ef"
-  integrity sha512-PypRjfnLPN4HPLz6VOyq7FpcbZPvG1CsZzBX7YMTBBiIZElt8NVk9cMZvTjZS7FzjgBdli0l8L60gt1ZdV2jvg==
+"@mrgnlabs/mrgn-common@2.0.3":
+  version "2.0.3"
+  resolved "https://registry.yarnpkg.com/@mrgnlabs/mrgn-common/-/mrgn-common-2.0.3.tgz#690947bfef623537221bd25a903fe9ff4cc161ea"
+  integrity sha512-OrCvFJv2mCHVqTDhVRRacLO8e1yHSXP1+PrQEAuxGHTnP8qQE51yFwRR+Ne8Gz6VMaD50BxWqsgBlT8/6hOStw==
   dependencies:
     "@coral-xyz/anchor" "^0.30.1"
     "@solana/buffer-layout" "4.0.1"
