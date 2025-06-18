@@ -12,6 +12,7 @@ import type { Position } from "./types/Position.interface.js";
 import { AppLogger } from "@quartz-labs/logger";
 import { getJupiterSwapQuote, makeJupiterIx } from "./utils/jupiter.js";
 import AdvancedConnection from "@quartz-labs/connection";
+import { CollateralBelowMinimumError } from "./types/errors.js";
 
 export class AutoRepayBot extends AppLogger {
     private initPromise: Promise<void>;
@@ -283,10 +284,15 @@ export class AutoRepayBot extends AppLogger {
             const refreshedHealth = refreshedUser?.getHealth();
             if (refreshedHealth === undefined || refreshedHealth === 0) throw lastError;
         } catch (error) {
+            if (error instanceof CollateralBelowMinimumError) {
+                this.logger.warn(`Collateral is below minimum amount for ${user.pubkey.toBase58()}, skipping auto-repay`);
+                return;
+            }
+
             let slippageError = "";
             if (
-                lastError instanceof SendTransactionError
-                && await isSlippageError(lastError, this.connection)
+                error instanceof SendTransactionError
+                && await isSlippageError(error, this.connection)
             ) {
                 slippageError = " [Slippage Exceeded]";
             }
@@ -308,6 +314,7 @@ export class AutoRepayBot extends AppLogger {
         swapMode: SwapMode
     }> {
         if (!this.quartzClient) throw new Error("Quartz client is not initialized");
+        let isCollateralAboveMin = false;
 
         // Try each token pair for a Jupiter quote, from largest to smallest values
         for (const loanPosition of loanPositions) {
@@ -329,6 +336,8 @@ export class AutoRepayBot extends AppLogger {
 
                 // Ignore cases where largest loan's value is less than minimum amount
                 if (loanRepayUsdcValue < decimalToBaseUnit(MIN_LOAN_VALUE_DOLLARS, MARKET_INDEX_USDC)) continue; 
+
+                isCollateralAboveMin = true;
  
                 try {
                     return await fetchExactOutParams(
@@ -351,6 +360,10 @@ export class AutoRepayBot extends AppLogger {
                     } catch { } // Ignore error until no routes are found
                 }
             }
+        }
+
+        if (!isCollateralAboveMin) {
+            throw new CollateralBelowMinimumError();
         }
 
         throw new Error("No valid Jupiter quote found");
