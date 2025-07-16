@@ -335,8 +335,11 @@ export class AutoRepayBot extends AppLogger {
                 );
 
                 // Ignore cases where largest loan's value is less than minimum amount
-                if (loanRepayUsdcValue < decimalToBaseUnit(MIN_LOAN_VALUE_DOLLARS, MARKET_INDEX_USDC)) continue; 
-
+                if (loanRepayUsdcValue < decimalToBaseUnit(MIN_LOAN_VALUE_DOLLARS, MARKET_INDEX_USDC)) {
+                    continue; 
+                }
+                
+                // If any case is above minimum, set flag to true
                 isCollateralAboveMin = true;
  
                 try {
