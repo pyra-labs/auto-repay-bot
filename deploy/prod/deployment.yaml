@@ -34,9 +34,9 @@ spec:
                   name: liquidator-keypair
                   key: key
             - name: EMAIL_TO
-              value: ben@harpoon.dev
+              value: iarla@pyra.fi,diego@pyra.fi
             - name: EMAIL_FROM
-              value: diego@quartzpay.io
+              value: diego@pyra.fi
             - name: EMAIL_HOST
               value: smtp-relay.brevo.com
             - name: EMAIL_PORT
