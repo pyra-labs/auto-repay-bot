@@ -23,10 +23,10 @@ spec:
           env:
             - name: GOOGLE_CLOUD_PROJECT
               value: festive-cirrus-452916-c1
-            - name: RPC_URL
+            - name: RPC_URLS
               valueFrom:
                 secretKeyRef:
-                  name: rpc-url
+                  name: rpc-urls
                   key: key
             - name: LIQUIDATOR_KEYPAIR
               valueFrom:
