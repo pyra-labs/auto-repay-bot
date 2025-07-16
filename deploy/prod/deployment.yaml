@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auto-repay-bot
+  namespace: prod
+  labels:
+    env: prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auto-repay-bot
+  template:
+    metadata:
+      name: auto-repay-bot
+      labels:
+        env: prod
+        app: auto-repay-bot
+    spec:
+      containers:
+        - image: LOCATION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE:TAG
+          name: app
+          env:
+            - name: GOOGLE_CLOUD_PROJECT
+              value: festive-cirrus-452916-c1
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rpc-url
+                  key: key
+            - name: LIQUIDATOR_KEYPAIR
+              valueFrom:
+                secretKeyRef:
+                  name: liquidator-keypair
+                  key: key
+            - name: EMAIL_TO
+              value: ben@harpoon.dev
+            - name: EMAIL_FROM
+              value: diego@quartzpay.io
+            - name: EMAIL_HOST
+              value: smtp-relay.brevo.com
+            - name: EMAIL_PORT
+              value: "587"
+            - name: EMAIL_USER
+              value: 77aaea001@smtp-brevo.com
+            - name: EMAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: email-password
+                  key: key
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          securityContext:
+            runAsUser: 1005
+            runAsNonRoot: true
