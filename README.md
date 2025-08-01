@@ -27,14 +27,11 @@ This bot wraps these instructions around a MarginFi flash loan. See executeAutoR
 
 ## Running your own bot
 
-As is, this bot can be run on your own machine or by using AWS. To use AWS, you will need to use AWS's Secret Management Service for the private key and should have a .env file similar to this:
+Set up the .env file like the example below.
 
 ```
 LIQUIDATOR_KEYPAIR=4KFBRq9...5Z7BWFz
-RPC_URLS=https://api.mainnet-beta.solana.com 
-USE_AWS=true
-AWS_SECRET_NAME=secret
-AWS_REGION=eu-north-1
+RPC_URLS=https://api.mainnet-beta.solana.com,https://api.mainnet-beta.triton.one
 EMAIL_TO=iarla@pyra.fi,diego@pyra.fi
 EMAIL_FROM=diego@pyra.fi
 EMAIL_HOST=your-email-client.com
@@ -43,23 +40,7 @@ EMAIL_USER=000000000@your-client-username.com
 EMAIL_PASSWORD=0000000000
 ```
 
-You can also run this bot on your own machine, in which case you will need to provide the secret key in base58 format, similar to:
-
-```
-LIQUIDATOR_KEYPAIR=4KFBRq9...5Z7BWFz
-RPC_URLS=https://api.mainnet-beta.solana.com 
-USE_AWS=false
-AWS_SECRET_NAME=
-AWS_REGION=
-EMAIL_TO=iarla@pyra.fi,diego@pyra.fi
-EMAIL_FROM=diego@pyra.fi
-EMAIL_HOST=your-email-client.com
-EMAIL_PORT=123
-EMAIL_USER=000000000@your-client-username.com
-EMAIL_PASSWORD=0000000000
-```
-
-The EMAIL_* variables are for error notifications through SMTP. In either case, you can run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that. The bot uses yarn so no need for npm install, direct npm run start will build.
+The EMAIL_* variables are for error notifications through SMTP. You can then run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that.
 
 The initialistion of the ATA accounts should go through with a funded wallet, however you might experience errors such as:
 
