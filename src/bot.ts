@@ -1,11 +1,11 @@
-import { type Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { type Keypair, type PublicKey, SendTransactionError, SystemProgram, type TransactionInstruction, type VersionedTransaction } from "@solana/web3.js";
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
 import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError } from "./utils/helpers.js";
 import config from "./config/config.js";
-import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, getComputerUnitLimitIx, ZERO, buildTransaction } from "@quartz-labs/sdk";
+import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, ZERO, buildTransaction } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { SwapMode } from "@jup-ag/api";
 import type { Position } from "./types/Position.interface.js";
@@ -48,33 +48,30 @@ export class AutoRepayBot extends AppLogger {
             const tokenProgram = await getTokenProgram(this.connection, token.mint);
             const ata = await getAssociatedTokenAddress(token.mint, this.wallet.publicKey, false, tokenProgram);
 
-            const oix_createAta = await makeCreateAtaIxIfNeeded(this.connection, ata, this.wallet.publicKey, token.mint, tokenProgram);
+            const oix_createAta = await makeCreateAtaIxIfNeeded(
+                this.connection, 
+                ata, 
+                this.wallet.publicKey, 
+                token.mint, 
+                tokenProgram, 
+                this.wallet.publicKey
+            );
             if (oix_createAta.length > 0) oix_createATAs.push(...oix_createAta);
 
             this.splWallets[Number(marketIndex) as MarketIndex] = ata;
         }
         if (oix_createATAs.length === 0) return;
 
-        const blockhash = (await this.connection.getLatestBlockhash()).blockhash;
-        const ix_computeLimit = await getComputerUnitLimitIx(
-            this.connection, 
-            oix_createATAs, 
-            this.wallet.publicKey, 
-            blockhash
+        const transaction = await buildTransaction(
+            this.connection,
+            oix_createATAs,
+            this.wallet.publicKey,
+            []
         );
-        const ix_computePrice = await getComputeUnitPriceIx(this.connection, oix_createATAs);
-        oix_createATAs.unshift(ix_computeLimit, ix_computePrice);
-
-        const latestBlockhash = await this.connection.getLatestBlockhash();
-        const messageV0 = new TransactionMessage({
-            payerKey: this.wallet.publicKey,
-            recentBlockhash: latestBlockhash.blockhash,
-            instructions: oix_createATAs,
-        }).compileToV0Message();
-        const transaction = new VersionedTransaction(messageV0);
 
         transaction.sign([this.wallet]);
         const signature = await this.connection.sendRawTransaction(transaction.serialize());
+        const latestBlockhash = await this.connection.getLatestBlockhash();
         await this.connection.confirmTransaction({ signature, ...latestBlockhash }, "confirmed");
         this.logger.info(`Created associated token accounts, signature: ${signature}`);
     }
@@ -422,7 +419,8 @@ export class AutoRepayBot extends AppLogger {
                 this.splWallets[marketIndexLoan], 
                 this.wallet.publicKey, 
                 TOKENS[marketIndexLoan].mint, 
-                TOKEN_PROGRAM_ID
+                TOKEN_PROGRAM_ID,
+                this.wallet.publicKey
             );
         } else if (marketIndexCollateral === MARKET_INDEX_SOL) {
             const wrappableLamports = Math.max(0, startingLamportsBalance - MIN_LAMPORTS_BALANCE);
@@ -433,7 +431,8 @@ export class AutoRepayBot extends AppLogger {
                 this.splWallets[marketIndexCollateral], 
                 this.wallet.publicKey, 
                 TOKENS[marketIndexCollateral].mint, 
-                TOKEN_PROGRAM_ID
+                TOKEN_PROGRAM_ID,
+                this.wallet.publicKey
             );
         }
 
@@ -515,25 +514,13 @@ export class AutoRepayBot extends AppLogger {
         }
 
         // If no loan required, build regular tx
-        const latestBlockhash = await retryWithBackoff(
-            async () => this.connection.getLatestBlockhash()
+        const transaction = await buildTransaction(
+            this.connection,
+            instructions,
+            this.wallet.publicKey,
+            lookupTables
         );
-        const ix_computeLimit = await getComputerUnitLimitIx(
-            this.connection, 
-            instructions, 
-            this.wallet.publicKey, 
-            latestBlockhash.blockhash,
-            lookupTables 
-        );
-        const ix_computePrice = await getComputeUnitPriceIx(this.connection, instructions);
-        instructions.unshift(ix_computeLimit, ix_computePrice);
-
-        const messageV0 = new TransactionMessage({
-            payerKey: this.wallet.publicKey,
-            recentBlockhash: latestBlockhash.blockhash,
-            instructions: instructions
-        }).compileToV0Message(lookupTables);
-        return new VersionedTransaction(messageV0);
+        return transaction;
     }
 
     private async checkRemainingBalance(address: PublicKey): Promise<void> {
