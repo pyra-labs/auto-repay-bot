@@ -27,14 +27,11 @@ This bot wraps these instructions around a MarginFi flash loan. See executeAutoR
 
 ## Running your own bot
 
-As is, this bot can be run on your own machine or by using AWS. To use AWS, you will need to use AWS's Secret Management Service for the private key and should have a .env file similar to this:
+Set up the .env file like the example below.
 
 ```
-WALLET_KEYPAIR=
-RPC_URL=https://api.mainnet-beta.solana.com 
-USE_AWS=true
-AWS_SECRET_NAME=secret
-AWS_REGION=eu-north-1
+LIQUIDATOR_KEYPAIR=4KFBRq9...5Z7BWFz
+RPC_URLS=https://api.mainnet-beta.solana.com,https://api.mainnet-beta.triton.one
 EMAIL_TO=iarla@pyra.fi,diego@pyra.fi
 EMAIL_FROM=diego@pyra.fi
 EMAIL_HOST=your-email-client.com
@@ -43,20 +40,23 @@ EMAIL_USER=000000000@your-client-username.com
 EMAIL_PASSWORD=0000000000
 ```
 
-You can also run this bot on your own machine, in which case you will need to provide the secret key in a Uint8 byte array format, similar to:
+The EMAIL_* variables are for error notifications through SMTP. You can then run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that.
 
-```
-WALLET_KEYPAIR=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-RPC_URL=https://api.mainnet-beta.solana.com 
-USE_AWS=false
-AWS_SECRET_NAME=
-AWS_REGION=
-EMAIL_TO=iarla@pyra.fi,diego@pyra.fi
-EMAIL_FROM=diego@pyra.fi
-EMAIL_HOST=your-email-client.com
-EMAIL_PORT=123
-EMAIL_USER=000000000@your-client-username.com
-EMAIL_PASSWORD=0000000000
-```
+The initialistion of the ATA accounts should go through with a funded wallet, however you might experience errors such as:
 
-The EMAIL_* variables are for error notifications through SMTP. In either case, you can run the bot with `npm run start`. The bot's address will need enough SOL to create 2 ATAs and a MarginFi account when initializing for the first time, and enough for gas fees after that.
+--------------------------------
+[2025-07-19 22:24:29] error: unhandledRejection: API bundle failed: Network congested. Endpoint is globally rate limited.
+Error: API bundle failed: Network congested. Endpoint is globally rate limited.
+
+The above error is from the jito bundle endpoint and just requires a bit patience or rerunning the bot at certain points when jito bundles arent limited. 
+
+Subsequently you might encounter:
+------ Transaction Details 👇 ------
+📝 Executing 1 transaction
+📡 Broadcast type: BUNDLE
+💸 Bundle tip: undefined SOL
+--------------------------------
+[2025-07-19 22:43:54] error: unhandledRejection: API bundle failed: Bundle must tip at least 1000 lamports
+Error: API bundle failed: Bundle must tip at least 1000 lamports
+
+which is expected due to bundle tips being undefined. This will be resolved, but you should be able to check your accounts/ATA have been intiialised.
