@@ -1,10 +1,10 @@
 import { SwapMode } from "@jup-ag/api";
-import { baseUnitToDecimal, decimalToBaseUnit, MARKET_INDEX_USDC, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
+import { baseUnitToDecimal, decimalToBaseUnit, fetchAndParse, MARKET_INDEX_USDC, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
 import type { Connection, PublicKey, SendTransactionError } from "@solana/web3.js";
-import type { PythResponse } from "../types/Pyth.interface.js";
 import type { Position } from "../types/Position.interface.js";
 import { JUPITER_SLIPPAGE_BPS, SLIPPAGE_ERROR_CODES } from "../config/constants.js";
 import { getJupiterSwapQuote } from "./jupiter.js";
+import type { PythResponse } from "../types/PythResponse.interface.js";
 
 export async function fetchExactOutParams(
     marketIndexCollateral: MarketIndex,
@@ -78,68 +78,6 @@ export async function getTokenAccountBalance(connection: Connection, tokenAccoun
         async () => connection.getTokenAccountBalance(tokenAccount)
     )
     return Number(balance.value.amount);
-}
-
-
-export async function getPrices(): Promise<Record<MarketIndex, number>> {
-    try {
-        return await getPricesPyth();
-    } catch {
-        try {
-            return await getPricesCoinGecko();
-        } catch {
-            throw new Error("Failed to fetch prices from main (Pyth) and backup (CoinGecko) sources");
-        }
-    }
-}
-
-async function getPricesPyth(): Promise<Record<MarketIndex, number>> {
-    const pythPriceFeedIdParams = MarketIndex.map(index => `ids%5B%5D=${TOKENS[index].pythPriceFeedId}`);
-    const endpoint = `https://hermes.pyth.network/v2/updates/price/latest?${pythPriceFeedIdParams.join("&")}`;
-    const reponse = await fetch(endpoint);
-    if (!reponse.ok) throw new Error("Failed to fetch prices");
-    const body = await reponse.json() as PythResponse;
-    const pricesData = body.parsed;
-
-    const prices = {} as Record<MarketIndex, number>;
-    for (const index of MarketIndex) {
-        prices[index] = 0;
-    }
-    
-    for (const priceData of pricesData) {
-        const marketIndex = MarketIndex.find(index => TOKENS[index].pythPriceFeedId.slice(2) === priceData.id);
-        if (marketIndex === undefined) continue;
-
-        const price = Number(priceData.price.price) * (10 ** priceData.price.expo);
-        prices[marketIndex] = price;
-    }
-
-    return prices;
-}
-
-async function getPricesCoinGecko(): Promise<Record<MarketIndex, number>> {
-    const coinGeckoIdParams = MarketIndex.map(index => TOKENS[index].coingeckoPriceId).join(",");
-    const endpoint = `https://api.coingecko.com/api/v3/simple/price?ids=${coinGeckoIdParams}&vs_currencies=usd`;
-    const response = await fetch(endpoint);
-    if (!response.ok) throw new Error("Failed to fetch prices");
-    const body = await response.json() as Record<string, { usd: number }>;
-    
-    const prices = {} as Record<MarketIndex, number>;
-    for (const index of MarketIndex) {
-        prices[index] = 0;
-    }
-
-    for (const id of Object.keys(body)) {
-        const marketIndex = MarketIndex.find(index => TOKENS[index].coingeckoPriceId === id);
-        if (marketIndex === undefined) continue;
-
-        const value = body[id];
-        if (value === undefined) continue;
-
-        prices[marketIndex] = value.usd;
-    }
-
-    return prices;
 }
 
 export async function getSortedPositions(
@@ -232,4 +170,63 @@ export async function isSlippageError(error: SendTransactionError, connection: C
             error => log.includes(error) // Check if any slippage errors are contained in any logs
         )
     );
+}
+
+export async function getPrices(): Promise<Record<MarketIndex, number>> {
+    try {
+        return await getPricesPyth();
+    } catch (pythError) {
+        try {
+            return await getPricesCoinGecko();
+        } catch (coingeckoError) {
+            throw new Error(`Failed to fetch prices from main (Pyth) and backup (CoinGecko) sources. Pyth error: ${pythError}, CoinGecko error: ${coingeckoError}`);
+        }
+    }
+}
+
+async function getPricesPyth(): Promise<Record<MarketIndex, number>> {
+    const pythPriceFeedIdParams = MarketIndex
+        .filter(index => index !== 29) // TODO: Temporary fix for META price feed
+        .map(index => `ids%5B%5D=${TOKENS[index].pythPriceFeedId}`);
+    const endpoint = `https://hermes.pyth.network/v2/updates/price/latest?${pythPriceFeedIdParams.join("&")}`;
+    const body = await fetchAndParse<PythResponse>(endpoint);
+    const pricesData = body.parsed;
+
+    const prices = {} as Record<MarketIndex, number>;
+    for (const index of MarketIndex) {
+        prices[index] = 0;
+    }
+    
+    for (const priceData of pricesData) {
+        const marketIndex = MarketIndex.find(index => TOKENS[index].pythPriceFeedId.slice(2) === priceData.id);
+        if (marketIndex === undefined) continue;
+
+        const price = Number(priceData.price.price) * (10 ** priceData.price.expo);
+        prices[marketIndex] = price;
+    }
+
+    return prices;
+}
+
+async function getPricesCoinGecko(): Promise<Record<MarketIndex, number>> {
+    const coinGeckoIdParams = MarketIndex.map(index => TOKENS[index].coingeckoPriceId).join(",");
+    const endpoint = `https://api.coingecko.com/api/v3/simple/price?ids=${coinGeckoIdParams}&vs_currencies=usd`;
+    const body = await fetchAndParse<Record<string, { usd: number }>>(endpoint);
+    
+    const prices = {} as Record<MarketIndex, number>;
+    for (const index of MarketIndex) {
+        prices[index] = 0;
+    }
+
+    for (const id of Object.keys(body)) {
+        const marketIndex = MarketIndex.find(index => TOKENS[index].coingeckoPriceId === id);
+        if (marketIndex === undefined) continue;
+
+        const value = body[id];
+        if (value === undefined) continue;
+
+        prices[marketIndex] = value.usd;
+    }
+
+    return prices;
 }
