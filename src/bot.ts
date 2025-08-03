@@ -3,7 +3,7 @@ import type { AddressLookupTableAccount } from "@solana/web3.js";
 import { getConfig as getMarginfiConfig, type MarginfiAccountWrapper, MarginfiClient } from "@mrgnlabs/marginfi-client-v2";
 import { createSyncNativeInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { MAX_AUTO_REPAY_ATTEMPTS, LOOP_DELAY, JUPITER_SLIPPAGE_BPS, MIN_LAMPORTS_BALANCE, GOAL_HEALTH, MIN_LOAN_VALUE_DOLLARS } from "./config/constants.js";
-import { getTokenAccountBalance, getPrices, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError } from "./utils/helpers.js";
+import { getTokenAccountBalance, getSortedPositions, fetchExactInParams, fetchExactOutParams, isSlippageError, getPrices } from "./utils/helpers.js";
 import config from "./config/config.js";
 import { MarketIndex, getTokenProgram, QuartzClient, type QuartzUser, TOKENS, makeCreateAtaIxIfNeeded, baseUnitToDecimal, type BN, retryWithBackoff, MARKET_INDEX_SOL, decimalToBaseUnit, MARKET_INDEX_USDC, getComputeUnitPriceIx, ZERO, buildTransaction } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
@@ -177,7 +177,7 @@ export class AutoRepayBot extends AppLogger {
                 await this.attemptAutoRepay(refreshedUser);
             }
         } catch (error) {
-            this.logger.error(`Error processing user: ${error} - ${JSON.stringify(user)}`);
+            this.logger.error(`Error processing user: ${error} - User: ${user.pubkey.toBase58()}`);
         }
     }
 
