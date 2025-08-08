@@ -19,10 +19,13 @@ const envSchema = z.object({
         .transform((str) => {
             try {
                 const urls = str.split(',').map(url => url.trim());
-                if (!urls.every(url => url.startsWith("https"))) throw new Error();
+                if (!urls.every(url => url.startsWith("https"))) {
+                    const invalidUrls = urls.filter(url => !url.startsWith("https"));
+                    throw new Error(`Invalid URLs found: ${invalidUrls.join(', ')}`);
+                }
                 return urls;
-            } catch {
-                throw new Error("Invalid RPC_URLS format: must be comma-separated URLs starting with https");
+            } catch (error) {
+                throw new Error(`Invalid RPC_URLS format: must be comma-separated URLs starting with https - ${error}`);
             }
         }),
 });
