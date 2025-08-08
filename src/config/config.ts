@@ -19,9 +19,11 @@ const envSchema = z.object({
         .transform((str) => {
             try {
                 const urls = str.split(',').map(url => url.trim());
+                if (urls.length === 0) throw new Error("No URLs found");
+
                 if (!urls.every(url => url.startsWith("https"))) {
                     const invalidUrls = urls.filter(url => !url.startsWith("https"));
-                    throw new Error(`Invalid URLs found: ${invalidUrls.join(', ')}`);
+                    throw new Error(`Invalid URLs found: ${invalidUrls.join(',')}`);
                 }
                 return urls;
             } catch (error) {
