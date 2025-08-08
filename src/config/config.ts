@@ -21,13 +21,16 @@ const envSchema = z.object({
                 const urls = str.split(',').map(url => url.trim());
                 if (urls.length === 0) throw new Error("No URLs found");
 
-                if (!urls.every(url => url.startsWith("https"))) {
-                    const invalidUrls = urls.filter(url => !url.startsWith("https"));
+                const validUrls = urls.filter(url => url.length > 0);
+                if (validUrls.length === 0) throw new Error("No URLs found after filtering empty strings");
+
+                const invalidUrls = validUrls.filter(url => !url.startsWith("https"));
+                if (invalidUrls.length > 0) {
                     throw new Error(`Invalid URLs found: ${invalidUrls.join(',')}`);
                 }
-                return urls;
+                return validUrls;
             } catch (error) {
-                throw new Error(`Invalid RPC_URLS format: must be comma-separated URLs starting with https - ${error}`);
+                throw new Error(`RPC_URLS must be comma-separated URLs starting with https - ${error}`);
             }
         }),
 });
