@@ -2,7 +2,7 @@ import { SwapMode } from "@jup-ag/api";
 import { baseUnitToDecimal, decimalToBaseUnit, fetchAndParse, MARKET_INDEX_USDC, MarketIndex, retryWithBackoff, TOKENS, type BN, type QuartzUser } from "@quartz-labs/sdk";
 import type { Connection, PublicKey, SendTransactionError } from "@solana/web3.js";
 import type { Position } from "../types/Position.interface.js";
-import { JUPITER_SLIPPAGE_BPS, SLIPPAGE_ERROR_CODES } from "../config/constants.js";
+import { SWAP_SLIPPAGE_BPS, SLIPPAGE_ERROR_CODES } from "../config/constants.js";
 import { getJupiterSwapQuote } from "./jupiter.js";
 import type { PythResponse } from "../types/PythResponse.interface.js";
 
@@ -16,7 +16,7 @@ export async function fetchExactOutParams(
 ) {
     // Ensure the collateral required for the loan repay is not higher than the collateral balance
     const collateralBalanceValue = baseUnitToDecimal(collateralBalance, marketIndexCollateral) * collateralPrice;
-    const loanEquivalentDecimal = (collateralBalanceValue / loanPrice) * (1 - JUPITER_SLIPPAGE_BPS / 10_000);
+    const loanEquivalentDecimal = (collateralBalanceValue / loanPrice) * (1 - SWAP_SLIPPAGE_BPS / 10_000);
     const loanEquivalentBaseUnits = decimalToBaseUnit(loanEquivalentDecimal, marketIndexLoan);
 
     const loanRepayValue = baseUnitToDecimal(loanRepayUsdcValue, MARKET_INDEX_USDC);
@@ -29,7 +29,7 @@ export async function fetchExactOutParams(
         TOKENS[marketIndexLoan].mint, 
         TOKENS[marketIndexCollateral].mint, 
         repayAmountLoan, 
-        JUPITER_SLIPPAGE_BPS
+        SWAP_SLIPPAGE_BPS
     );
 
     return {
@@ -57,7 +57,7 @@ export async function fetchExactInParams(
         TOKENS[marketIndexCollateral].mint, 
         TOKENS[marketIndexLoan].mint, 
         repayAmountCollateral, 
-        JUPITER_SLIPPAGE_BPS
+        SWAP_SLIPPAGE_BPS
     );
 
     return {
