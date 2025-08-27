@@ -6,7 +6,6 @@ metadata:
   labels:
     env: prod
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: auto-repay-bot
