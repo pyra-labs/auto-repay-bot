@@ -49,11 +49,11 @@ spec:
                   key: key
           resources:
             requests:
-              memory: 256Mi
-              cpu: 250m
-            limits:
               memory: 512Mi
               cpu: 500m
+            limits:
+              memory: 1024Mi
+              cpu: 1000m
           securityContext:
             runAsUser: 1005
             runAsNonRoot: true
@@ -71,15 +71,15 @@ spec:
   minReplicas: 2
   maxReplicas: 6
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 80
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
