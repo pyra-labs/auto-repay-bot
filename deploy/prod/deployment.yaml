@@ -76,7 +76,6 @@ spec:
     name: auto-repay-bot
   updatePolicy:
     updateMode: "Auto"
-    minReplicas: 1  # Ensure at least 1 pod is always running
   resourcePolicy:
     containerPolicies:
     - containerName: app
