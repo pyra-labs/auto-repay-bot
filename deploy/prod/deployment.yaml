@@ -53,6 +53,8 @@ spec:
                 secretKeyRef:
                   name: email-password
                   key: key
+            - name: INTERNAL_API_URL
+              value: https://api.pyra.fi/card/
           resources:
             requests:
               memory: 256Mi
@@ -78,11 +80,11 @@ spec:
     updateMode: "Auto"
   resourcePolicy:
     containerPolicies:
-    - containerName: app
-      minAllowed:
-        cpu: 100m
-        memory: 128Mi
-      maxAllowed:
-        cpu: 1500m
-        memory: 2Gi
-      controlledResources: ["cpu", "memory"]
+      - containerName: app
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 1500m
+          memory: 2Gi
+        controlledResources: ["cpu", "memory"]

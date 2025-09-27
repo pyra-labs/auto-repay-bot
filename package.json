@@ -28,7 +28,7 @@
     "@mrgnlabs/marginfi-client-v2": "6.1.3",
     "@mrgnlabs/mrgn-common": "2.0.4",
     "@orca-so/common-sdk": "^0.6.11",
-    "@orca-so/whirlpools-sdk": "^0.15.0",
+    "@orca-so/whirlpools-sdk": "0.16.0",
     "@quartz-labs/connection": "^2.0.0",
     "@quartz-labs/logger": "^1.1.1",
     "@quartz-labs/sdk": "0.24.1",
