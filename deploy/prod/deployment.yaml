@@ -6,6 +6,12 @@ metadata:
   labels:
     env: prod
 spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: auto-repay-bot
@@ -54,34 +60,31 @@ spec:
               memory: 256Mi
               cpu: 250m
             limits:
-              memory: 1024Mi
-              cpu: 1000m
+              memory: 2Gi
+              cpu: 1500m
           securityContext:
             runAsUser: 1005
             runAsNonRoot: true
 ---
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
 metadata:
   name: auto-repay-bot
   namespace: prod
 spec:
-  scaleTargetRef:
+  targetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: auto-repay-bot
-  minReplicas: 2
-  maxReplicas: 6
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 80
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: app
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 1500m
+          memory: 2Gi
+        controlledResources: ["cpu", "memory"]
