@@ -47,6 +47,8 @@ spec:
                 secretKeyRef:
                   name: email-password
                   key: key
+            - name: INTERNAL_API_URL
+              value: https://api.pyra.fi/card/
           resources:
             requests:
               memory: 256Mi
@@ -71,15 +73,15 @@ spec:
   minReplicas: 2
   maxReplicas: 6
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 80
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
