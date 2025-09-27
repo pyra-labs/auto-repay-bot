@@ -1,5 +1,5 @@
 export interface VaultResponse {
-	address: string;
+	publicKey: string;
 	vault: VaultData;
 	depositAddress: {
 		lamports: number;

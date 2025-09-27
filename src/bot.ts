@@ -215,9 +215,15 @@ export class AutoRepayBot extends AppLogger {
 		try {
 			const response = await fetchAndParse<{
 				users: VaultResponse[];
-			}>(`${config.INTERNAL_API_URL}/data/all-open-orders`);
-			return response.users.map((user) => new PublicKey(user.vault.owner));
-		} catch {
+			}>(`${config.INTERNAL_API_URL}/data/all-users`);
+			const owners = response.users.map(
+				(user) => new PublicKey(user.vault.owner),
+			);
+			return owners;
+		} catch (error) {
+			this.logger.warn(
+				`API fetch failed, falling back to RPC for getAllOwnersPubkeys: ${error} - ${JSON.stringify(error)}`,
+			);
 			const owners = await this.quartzClient.getAllQuartzAccountOwnerPubkeys();
 			return owners;
 		}
@@ -360,6 +366,13 @@ export class AutoRepayBot extends AppLogger {
 
 				return;
 			} catch (error) {
+				if (error instanceof CollateralBelowMinimumError) {
+					this.logger.warn(
+						`Collateral is below minimum amount for ${user.pubkey.toBase58()}, skipping auto-repay`,
+					);
+					return;
+				}
+
 				lastError = error;
 				this.logger.warn(
 					`Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${lastError}`,
@@ -378,13 +391,6 @@ export class AutoRepayBot extends AppLogger {
 			if (refreshedHealth === undefined || refreshedHealth === 0)
 				throw lastError;
 		} catch (error) {
-			if (error instanceof CollateralBelowMinimumError) {
-				this.logger.warn(
-					`Collateral is below minimum amount for ${user.pubkey.toBase58()}, skipping auto-repay`,
-				);
-				return;
-			}
-
 			let slippageError = "";
 			if (
 				error instanceof SendTransactionError &&
