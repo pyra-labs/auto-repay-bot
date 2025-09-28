@@ -1,6 +1,6 @@
 export interface UserDataResponse {
 	vaultAddress: string;
-	vaultData: VaultData;
+	vaultAccount: VaultData;
 	depositAddress: {
 		lamports: number;
 		splAccounts: DepositAddressSplAccount[];

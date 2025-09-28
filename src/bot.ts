@@ -217,7 +217,7 @@ export class AutoRepayBot extends AppLogger {
 				users: UserDataResponse[];
 			}>(`${config.INTERNAL_API_URL}/data/all-users`);
 			const owners = response.users.map(
-				(user) => new PublicKey(user.vaultData.owner),
+				(user) => new PublicKey(user.vaultAccount.owner),
 			);
 			return owners;
 		} catch (error) {
