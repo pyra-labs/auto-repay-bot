@@ -56,7 +56,7 @@ import { AppLogger } from "@quartz-labs/logger";
 import AdvancedConnection from "@quartz-labs/connection";
 import { CollateralBelowMinimumError } from "./types/errors.js";
 import { getOrcaSwapIx } from "./utils/orca.js";
-import type { VaultResponse } from "./types/Vault.interface.js";
+import type { UserDataResponse } from "./types/Vault.interface.js";
 
 export class AutoRepayBot extends AppLogger {
 	private initPromise: Promise<void>;
@@ -214,10 +214,10 @@ export class AutoRepayBot extends AppLogger {
 
 		try {
 			const response = await fetchAndParse<{
-				users: VaultResponse[];
+				users: UserDataResponse[];
 			}>(`${config.INTERNAL_API_URL}/data/all-users`);
 			const owners = response.users.map(
-				(user) => new PublicKey(user.vault.owner),
+				(user) => new PublicKey(user.vaultData.owner),
 			);
 			return owners;
 		} catch (error) {
