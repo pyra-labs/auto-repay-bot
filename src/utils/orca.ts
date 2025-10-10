@@ -80,19 +80,7 @@ export async function getOrcaSwapIx(
 		new PublicKey(whirlpoolPubkey),
 	);
 
-	console.log({
-		whirlpoolPubkey,
-		fromMint: fromMint.toBase58(),
-		toMint: toMint.toBase58(),
-		amount,
-		slippage: {
-			numerator: slippage.numerator.toNumber(),
-			denominator: slippage.denominator.toNumber(),
-		},
-		orcaProgram: orcaContext.program.programId,
-	});
 	const quote = await swapQuoteByInputToken(
-		// Error thrown here
 		whirlpool,
 		fromMint,
 		new BN(amount),
@@ -100,9 +88,8 @@ export async function getOrcaSwapIx(
 		orcaContext.program.programId,
 		orcaContext.fetcher,
 		IGNORE_CACHE,
-		UseFallbackTickArray.Always, // Same error if this line is removed
+		UseFallbackTickArray.Always,
 	);
-	console.log("This point is not reached");
 
 	const inAmountRequiredForSwap = Math.ceil(
 		quote.estimatedAmountIn.toNumber() * (1 + SWAP_SLIPPAGE_BPS / 10_000),

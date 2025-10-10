@@ -49,6 +49,7 @@ import {
 	ZERO,
 	buildTransaction,
 	fetchAndParse,
+	type WithdrawOrder,
 } from "@quartz-labs/sdk";
 import { NodeWallet } from "@mrgnlabs/mrgn-common";
 import type { Position } from "./types/Position.interface.js";
@@ -308,7 +309,12 @@ export class AutoRepayBot extends AppLogger {
 
 	private async attemptAutoRepay(user: QuartzUser): Promise<void> {
 		if (!this.quartzClient) throw new Error("Quartz client is not initialized");
-		const balances = await user.getMultipleTokenBalances([...MarketIndex]);
+
+		const openWithdrawOrders: WithdrawOrder[] = [];
+		const balances = await user.getMultipleTokenBalances(
+			[...MarketIndex],
+			openWithdrawOrders,
+		);
 		const prices = await getPrices();
 		const { collateralPositions, loanPositions } = await getSortedPositions(
 			balances,
