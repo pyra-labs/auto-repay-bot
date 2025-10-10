@@ -643,17 +643,17 @@ export class AutoRepayBot extends AppLogger {
 						wrapAndUnwrapSol: false,
 					},
 				);
-			const { instructions: ix_deposit } =
-				await this.marginfiAccount.makeDepositIx(
-					amountCollateralDecimal,
-					collateralBank.address,
-					{
-						wrapAndUnwrapSol: false,
-					},
-				);
+			const { instructions: ix_repay } = await this.marginfiAccount.makeRepayIx(
+				amountCollateralDecimal,
+				collateralBank.address,
+				false,
+				{
+					wrapAndUnwrapSol: false,
+				},
+			);
 
 			const flashloanTx = await this.marginfiAccount.buildFlashLoanTx({
-				ixs: [ix_computePrice, ...ix_borrow, ...instructions, ...ix_deposit],
+				ixs: [ix_computePrice, ...ix_borrow, ...instructions, ...ix_repay],
 				addressLookupTableAccounts: lookupTables,
 			});
 
