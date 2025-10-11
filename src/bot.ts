@@ -335,42 +335,56 @@ export class AutoRepayBot extends AppLogger {
 		let lastError: unknown = null;
 		for (let retry = 0; retry < MAX_AUTO_REPAY_ATTEMPTS; retry++) {
 			try {
-				const { swapAmountBaseUnits, marketIndexLoan, marketIndexCollateral } =
-					await this.fetchAutoRepayParams(
-						user,
-						loanPositions,
-						collateralPositions,
-						prices,
-						balances,
-					);
-
-				const signature = await this.executeAutoRepay(
-					user,
-					swapAmountBaseUnits,
-					marketIndexLoan,
-					marketIndexCollateral,
-				);
-
-				await retryWithBackoff(async () => {
-					const latestBlockhash = await this.connection.getLatestBlockhash();
-					const tx = await this.connection.confirmTransaction(
-						{ signature, ...latestBlockhash },
-						"confirmed",
-					);
-
-					await this.checkRemainingBalance(this.wallet.publicKey);
-
-					if (tx.value.err)
-						throw new Error(
-							`Tx passed preflight but failed on-chain: ${signature}`,
+				let lastError: unknown = null;
+				for (let assetsTried = 0; assetsTried < 8; assetsTried++) {
+					try {
+						const {
+							swapAmountBaseUnits,
+							marketIndexLoan,
+							marketIndexCollateral,
+						} = await this.fetchAutoRepayParams(
+							user,
+							loanPositions,
+							collateralPositions,
+							prices,
+							balances,
+							assetsTried,
 						);
-				}, 1);
 
-				this.logger.info(
-					`Executed auto-repay for ${user.pubkey.toBase58()}, signature: ${signature}`,
-				);
+						const signature = await this.executeAutoRepay(
+							user,
+							swapAmountBaseUnits,
+							marketIndexLoan,
+							marketIndexCollateral,
+						);
 
-				return;
+						await retryWithBackoff(async () => {
+							const latestBlockhash =
+								await this.connection.getLatestBlockhash();
+							const tx = await this.connection.confirmTransaction(
+								{ signature, ...latestBlockhash },
+								"confirmed",
+							);
+
+							await this.checkRemainingBalance(this.wallet.publicKey);
+
+							if (tx.value.err)
+								throw new Error(
+									`Tx passed preflight but failed on-chain: ${signature}`,
+								);
+						}, 1);
+
+						this.logger.info(
+							`Executed auto-repay for ${user.pubkey.toBase58()}, signature: ${signature}`,
+						);
+
+						return;
+					} catch (error) {
+						lastError = error;
+					}
+				}
+
+				if (lastError) throw lastError;
 			} catch (error) {
 				if (error instanceof CollateralBelowMinimumError) {
 					this.logger.warn(
@@ -417,6 +431,7 @@ export class AutoRepayBot extends AppLogger {
 		collateralPositions: Position[],
 		prices: Record<MarketIndex, number>,
 		balances: Record<MarketIndex, BN>,
+		skipAssetsUpTo = 0,
 	): Promise<{
 		swapAmountBaseUnits: number;
 		marketIndexLoan: MarketIndex;
@@ -427,7 +442,9 @@ export class AutoRepayBot extends AppLogger {
 
 		// Try each token pair for a Jupiter quote, from largest to smallest values
 		for (const loanPosition of loanPositions) {
-			for (const collateralPosition of collateralPositions) {
+			for (const collateralPosition of collateralPositions.slice(
+				skipAssetsUpTo,
+			)) {
 				if (loanPosition.marketIndex === collateralPosition.marketIndex) {
 					continue;
 				}
