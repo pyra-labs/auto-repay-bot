@@ -1,5 +1,5 @@
 import {
-	type Keypair,
+	Keypair,
 	PublicKey,
 	SendTransactionError,
 	SystemProgram,
@@ -9,7 +9,6 @@ import {
 import type { AddressLookupTableAccount } from "@solana/web3.js";
 import {
 	getConfig as getMarginfiConfig,
-	type MarginfiAccountWrapper,
 	MarginfiClient,
 } from "@mrgnlabs/marginfi-client-v2";
 import {
@@ -63,12 +62,11 @@ export class AutoRepayBot extends AppLogger {
 	private initPromise: Promise<void>;
 
 	private connection: AdvancedConnection;
-	private wallet: Keypair;
+	private feePayer: Keypair;
 	private splWallets = {} as Record<MarketIndex, PublicKey>;
 
 	private quartzClient: QuartzClient | undefined;
 	private marginfiClient: MarginfiClient | undefined;
-	private marginfiAccount: MarginfiAccountWrapper | undefined;
 
 	constructor() {
 		super({
@@ -77,7 +75,7 @@ export class AutoRepayBot extends AppLogger {
 		});
 
 		this.connection = new AdvancedConnection(config.RPC_URLS);
-		this.wallet = config.LIQUIDATOR_KEYPAIR;
+		this.feePayer = Keypair.fromSecretKey(config.LIQUIDATOR_KEYPAIR);
 
 		this.initPromise = this.initialize();
 	}
@@ -88,12 +86,23 @@ export class AutoRepayBot extends AppLogger {
 	}
 
 	private async initATAs(): Promise<void> {
+		const quartzClient = await QuartzClient.fetchClient({
+			connection: this.connection,
+		});
+
 		const oix_createATAs = [];
-		for (const [marketIndex, token] of Object.entries(TOKENS)) {
+		for (const [index, token] of Object.entries(TOKENS)) {
+			const marketIndex = Number(index) as MarketIndex;
+
+			const marketKeypair = quartzClient.getMarketKeypair(
+				marketIndex,
+				config.LIQUIDATOR_KEYPAIR,
+			);
+
 			const tokenProgram = await getTokenProgram(this.connection, token.mint);
 			const ata = await getAssociatedTokenAddress(
 				token.mint,
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				false,
 				tokenProgram,
 			);
@@ -101,10 +110,10 @@ export class AutoRepayBot extends AppLogger {
 			const oix_createAta = await makeCreateAtaIxIfNeeded(
 				this.connection,
 				ata,
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				token.mint,
 				tokenProgram,
-				this.wallet.publicKey,
+				this.feePayer.publicKey,
 			);
 			if (oix_createAta.length > 0) oix_createATAs.push(...oix_createAta);
 
@@ -112,14 +121,14 @@ export class AutoRepayBot extends AppLogger {
 		}
 		if (oix_createATAs.length === 0) return;
 
-		const transaction = await buildTransaction(
+		const { transaction } = await buildTransaction(
 			this.connection,
 			oix_createATAs,
-			this.wallet.publicKey,
+			this.feePayer.publicKey,
 			[],
 		);
 
-		transaction.sign([this.wallet]);
+		transaction.sign([this.feePayer]);
 		const signature = await this.connection.sendRawTransaction(
 			transaction.serialize(),
 		);
@@ -140,29 +149,20 @@ export class AutoRepayBot extends AppLogger {
 
 		this.marginfiClient = await MarginfiClient.fetch(
 			getMarginfiConfig(),
-			new NodeWallet(this.wallet),
+			new NodeWallet(this.feePayer),
 			this.connection,
 		);
-		const marginfiAccounts =
-			await this.marginfiClient.getMarginfiAccountsForAuthority(
-				this.wallet.publicKey,
-			);
-		if (marginfiAccounts.length === 0) {
-			this.marginfiAccount = await this.marginfiClient.createMarginfiAccount();
-		} else {
-			this.marginfiAccount = marginfiAccounts[0];
-		}
 	}
 
 	async start(): Promise<void> {
 		await this.initPromise;
 		this.logger.info(
-			`Auto-Repay Bot initialized with address ${this.wallet.publicKey}`,
+			`Auto-Repay Bot initialized with address ${this.feePayer.publicKey}`,
 		);
 
 		setInterval(
 			() => {
-				this.logger.info(`Heartbeat | Bot address: ${this.wallet?.publicKey}`);
+				this.logger.info(`Heartbeat | Bot address: ${this.feePayer.publicKey}`);
 			},
 			1000 * 60 * 60 * 24,
 		);
@@ -283,12 +283,12 @@ export class AutoRepayBot extends AppLogger {
 	): Promise<void> {
 		const { ixs, lookupTables, signers } = await user.makeFulfilDepositIxs(
 			marketIndex,
-			this.wallet.publicKey,
+			this.feePayer.publicKey,
 		);
-		const transaction = await buildTransaction(
+		const { transaction } = await buildTransaction(
 			this.connection,
 			ixs,
-			this.wallet.publicKey,
+			this.feePayer.publicKey,
 			lookupTables,
 		);
 		transaction.sign([...signers]);
@@ -366,7 +366,7 @@ export class AutoRepayBot extends AppLogger {
 								"confirmed",
 							);
 
-							await this.checkRemainingBalance(this.wallet.publicKey);
+							await this.checkRemainingBalance(this.feePayer.publicKey);
 
 							if (tx.value.err)
 								throw new Error(
@@ -514,10 +514,16 @@ export class AutoRepayBot extends AppLogger {
 	): Promise<string> {
 		if (
 			!this.splWallets[marketIndexLoan] ||
-			!this.splWallets[marketIndexCollateral]
+			!this.splWallets[marketIndexCollateral] ||
+			!this.quartzClient
 		) {
 			throw new Error("AutoRepayBot is not initialized");
 		}
+
+		const marketKeypair = this.quartzClient.getMarketKeypair(
+			marketIndexLoan,
+			config.LIQUIDATOR_KEYPAIR,
+		);
 
 		// Fetch quote and balances
 		const startingCollateralBalancePromise = getTokenAccountBalance(
@@ -525,7 +531,7 @@ export class AutoRepayBot extends AppLogger {
 			this.splWallets[marketIndexCollateral],
 		);
 		const startingLamportsBalancePromise = retryWithBackoff(async () => {
-			return await this.connection.getBalance(this.wallet.publicKey);
+			return await this.connection.getBalance(marketKeypair.publicKey);
 		});
 
 		const [startingLamportsBalance, startingCollateralBalance] =
@@ -538,7 +544,7 @@ export class AutoRepayBot extends AppLogger {
 		const { ix: swapIx, inAmountRequiredForSwap: requiredCollateralForRepay } =
 			await getOrcaSwapIx(
 				this.connection,
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				TOKENS[marketIndexCollateral].mint,
 				TOKENS[marketIndexLoan].mint,
 				swapAmount,
@@ -557,10 +563,10 @@ export class AutoRepayBot extends AppLogger {
 			oix_createWSolAta = await makeCreateAtaIxIfNeeded(
 				this.connection,
 				this.splWallets[marketIndexLoan],
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				TOKENS[marketIndexLoan].mint,
 				TOKEN_PROGRAM_ID,
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 			);
 		} else if (marketIndexCollateral === MARKET_INDEX_SOL) {
 			const wrappableLamports = Math.max(
@@ -575,17 +581,17 @@ export class AutoRepayBot extends AppLogger {
 			oix_createWSolAta = await makeCreateAtaIxIfNeeded(
 				this.connection,
 				this.splWallets[marketIndexCollateral],
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				TOKENS[marketIndexCollateral].mint,
 				TOKEN_PROGRAM_ID,
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 			);
 		}
 
 		if (lamportsToWrap > 0) {
 			oix_wrapSol.push(
 				SystemProgram.transfer({
-					fromPubkey: this.wallet.publicKey,
+					fromPubkey: marketKeypair.publicKey,
 					toPubkey: this.splWallets[MARKET_INDEX_SOL],
 					lamports: lamportsToWrap,
 				}),
@@ -600,7 +606,7 @@ export class AutoRepayBot extends AppLogger {
 		);
 		const { ixs: ixs_autoRepay, lookupTables } =
 			await user.makeCollateralRepayIxs(
-				this.wallet.publicKey,
+				marketKeypair.publicKey,
 				marketIndexLoan,
 				marketIndexCollateral,
 				swapIx,
@@ -616,8 +622,9 @@ export class AutoRepayBot extends AppLogger {
 			marketIndexCollateral,
 			instructions,
 			lookupTables,
+			marketKeypair,
 		);
-		transaction.sign([this.wallet]);
+		transaction.sign([this.feePayer]);
 
 		const signature = await retryWithBackoff(async () =>
 			this.connection.sendRawTransaction(transaction.serialize()),
@@ -631,8 +638,9 @@ export class AutoRepayBot extends AppLogger {
 		marketIndexCollateral: MarketIndex,
 		instructions: TransactionInstruction[],
 		lookupTables: AddressLookupTableAccount[],
+		marketKeypair: Keypair,
 	): Promise<VersionedTransaction> {
-		if (!this.marginfiAccount || !this.marginfiClient) {
+		if (!this.marginfiClient) {
 			throw new Error("AutoRepayBot is not initialized");
 		}
 
@@ -647,20 +655,28 @@ export class AutoRepayBot extends AppLogger {
 			if (!collateralBank)
 				throw new Error("Collateral bank for flash loan not found");
 
+			const marginfiAccount = await this.marginfiClient
+				.getMarginfiAccountsForAuthority(marketKeypair.publicKey)
+				.then((accounts) => accounts[0]);
+			if (!marginfiAccount) {
+				throw new Error(
+					`Marginfi account not found for market index ${marketIndexCollateral} and authority ${marketKeypair.publicKey.toBase58()}`,
+				);
+			}
+
 			const ix_computePrice = await getComputeUnitPriceIx(
 				this.connection,
 				instructions,
 			);
-			const { instructions: ix_borrow } =
-				await this.marginfiAccount.makeBorrowIx(
-					amountCollateralDecimal,
-					collateralBank.address,
-					{
-						createAtas: false,
-						wrapAndUnwrapSol: false,
-					},
-				);
-			const { instructions: ix_repay } = await this.marginfiAccount.makeRepayIx(
+			const { instructions: ix_borrow } = await marginfiAccount.makeBorrowIx(
+				amountCollateralDecimal,
+				collateralBank.address,
+				{
+					createAtas: false,
+					wrapAndUnwrapSol: false,
+				},
+			);
+			const { instructions: ix_repay } = await marginfiAccount.makeRepayIx(
 				amountCollateralDecimal,
 				collateralBank.address,
 				false,
@@ -669,7 +685,7 @@ export class AutoRepayBot extends AppLogger {
 				},
 			);
 
-			const flashloanTx = await this.marginfiAccount.buildFlashLoanTx({
+			const flashloanTx = await marginfiAccount.buildFlashLoanTx({
 				ixs: [ix_computePrice, ...ix_borrow, ...instructions, ...ix_repay],
 				addressLookupTableAccounts: lookupTables,
 			});
@@ -678,10 +694,10 @@ export class AutoRepayBot extends AppLogger {
 		}
 
 		// If no loan required, build regular tx
-		const transaction = await buildTransaction(
+		const { transaction } = await buildTransaction(
 			this.connection,
 			instructions,
-			this.wallet.publicKey,
+			this.feePayer.publicKey,
 			lookupTables,
 		);
 		return transaction;

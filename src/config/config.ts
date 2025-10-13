@@ -1,5 +1,4 @@
 import { bs58 } from "@quartz-labs/sdk";
-import { Keypair } from "@solana/web3.js";
 import dotenv from "dotenv";
 import { z } from "zod";
 
@@ -8,7 +7,7 @@ dotenv.config();
 const envSchema = z.object({
 	LIQUIDATOR_KEYPAIR: z.string().transform((str) => {
 		try {
-			return Keypair.fromSecretKey(bs58.decode(str));
+			return bs58.decode(str);
 		} catch (error) {
 			console.error(error);
 			throw new Error(
