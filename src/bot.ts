@@ -281,7 +281,7 @@ export class AutoRepayBot extends AppLogger {
 		user: QuartzUser,
 		marketIndex: MarketIndex,
 	): Promise<void> {
-		const { ixs, lookupTables, signers } = await user.makeFulfilDepositIxs(
+		const { ixs, lookupTables, signers } = await user.makeDepositIxs(
 			marketIndex,
 			this.feePayer.publicKey,
 		);
@@ -604,13 +604,13 @@ export class AutoRepayBot extends AppLogger {
 			0,
 			amountExtraCollateralRequired - lamportsToWrap,
 		);
-		const { ixs: ixs_autoRepay, lookupTables } =
-			await user.makeCollateralRepayIxs(
-				marketKeypair.publicKey,
-				marketIndexLoan,
-				marketIndexCollateral,
-				swapIx,
-			);
+		const { ixs: ixs_autoRepay, lookupTables } = await user.makeSwapIxs(
+			marketKeypair.publicKey,
+			this.feePayer.publicKey,
+			marketIndexCollateral,
+			marketIndexLoan,
+			[swapIx],
+		);
 
 		const instructions = [
 			...oix_createWSolAta,
