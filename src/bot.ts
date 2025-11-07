@@ -604,12 +604,14 @@ export class AutoRepayBot extends AppLogger {
 			0,
 			amountExtraCollateralRequired - lamportsToWrap,
 		);
+		const isOwnerSigner = false;
 		const { ixs: ixs_autoRepay, lookupTables } = await user.makeSwapIxs(
 			marketKeypair.publicKey,
 			this.feePayer.publicKey,
 			marketIndexCollateral,
 			marketIndexLoan,
 			[swapIx],
+			isOwnerSigner,
 		);
 
 		const instructions = [
