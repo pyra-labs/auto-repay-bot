@@ -62,8 +62,8 @@ export async function fetchExactOutParams(
 
 	const quote = await getJupiterSwapQuote(
 		SwapMode.ExactOut,
-		TOKENS[marketIndexLoan].mint,
 		TOKENS[marketIndexCollateral].mint,
+		TOKENS[marketIndexLoan].mint,
 		repayAmountLoan,
 		SWAP_SLIPPAGE_BPS,
 	);

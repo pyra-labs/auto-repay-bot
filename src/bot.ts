@@ -2,15 +2,10 @@ import {
 	Keypair,
 	PublicKey,
 	SendTransactionError,
-	SystemProgram,
 	type VersionedTransaction,
 	type TransactionInstruction,
 } from "@solana/web3.js";
-import {
-	createSyncNativeInstruction,
-	getAssociatedTokenAddress,
-	TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
 	MAX_AUTO_REPAY_ATTEMPTS,
 	LOOP_DELAY,
@@ -19,7 +14,6 @@ import {
 	MIN_LOAN_VALUE_DOLLARS,
 } from "./config/constants.js";
 import {
-	getTokenAccountBalance,
 	getSortedPositions,
 	fetchExactInParams,
 	isSlippageError,
@@ -388,14 +382,14 @@ export class AutoRepayBot extends AppLogger {
 						MARKET_INDEX_USDC,
 					);
 					this.logger.warn(
-						`Collateral of $${collateralValue} is below minimum amount for ${user.pubkey.toBase58()}, skipping auto-repay`,
+						`Collateral of $${collateralValue.toFixed(2)} is below minimum amount for ${user.pubkey.toBase58()}, skipping auto-repay`,
 					);
 					return;
 				}
 
 				lastError = error;
 				this.logger.warn(
-					`Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${lastError}`,
+					`Auto-repay transaction failed for ${user.pubkey.toBase58()}, retrying... Error: ${lastError} - ${JSON.stringify(lastError)}`,
 				);
 
 				const delay = 2_000 * (retry + 1);
@@ -420,7 +414,7 @@ export class AutoRepayBot extends AppLogger {
 			}
 
 			this.logger.error(
-				`Failed to execute auto-repay for ${user.pubkey.toBase58()}.${slippageError} Error: ${error}`,
+				`Failed to execute auto-repay for ${user.pubkey.toBase58()}.${slippageError} Error: ${error} - ${JSON.stringify(error)}`,
 			);
 		}
 	}
@@ -521,46 +515,24 @@ export class AutoRepayBot extends AppLogger {
 		}
 
 		const marketKeypair = getMarketKeypair(
-			marketIndexLoan,
+			marketIndexCollateral,
 			config.LIQUIDATOR_KEYPAIR,
 		);
-
-		// Fetch quote and balances
-		const startingCollateralBalancePromise = getTokenAccountBalance(
-			this.connection,
-			this.splWallets[marketIndexCollateral],
-		);
-		const startingLamportsBalancePromise = retryWithBackoff(async () => {
-			return await this.connection.getBalance(marketKeypair.publicKey);
-		});
-
-		const [startingLamportsBalance, startingCollateralBalance] =
-			await Promise.all([
-				startingLamportsBalancePromise,
-				startingCollateralBalancePromise,
-			]);
 
 		// Calculate balance amounts
 		const { ix: swapIx, lookupTables: jupiterLookupTables } =
 			await makeJupiterIx(this.connection, quote, marketKeypair.publicKey);
 
-		const requiredCollateralForRepay = Number(quote.inAmount);
-		if (Number.isNaN(requiredCollateralForRepay)) {
+		const amountCollateralToBorrow = Number(quote.inAmount);
+		if (Number.isNaN(amountCollateralToBorrow)) {
 			throw new Error("Invalid quote");
 		}
-		if (!Number.isInteger(requiredCollateralForRepay)) {
+		if (!Number.isInteger(amountCollateralToBorrow)) {
 			throw new Error("Swap quote returned decimal for inAmount");
 		}
 
-		const amountExtraCollateralRequired = Math.max(
-			0,
-			requiredCollateralForRepay - startingCollateralBalance,
-		);
-
 		// Wrap any SOL if needed
-		let lamportsToWrap = 0;
 		let oix_createWSolAta: TransactionInstruction[] = [];
-		const oix_wrapSol: TransactionInstruction[] = [];
 		if (marketIndexLoan === MARKET_INDEX_SOL) {
 			oix_createWSolAta = await makeCreateAtaIxIfNeeded(
 				this.connection,
@@ -571,15 +543,6 @@ export class AutoRepayBot extends AppLogger {
 				marketKeypair.publicKey,
 			);
 		} else if (marketIndexCollateral === MARKET_INDEX_SOL) {
-			const wrappableLamports = Math.max(
-				0,
-				startingLamportsBalance - MIN_LAMPORTS_BALANCE,
-			);
-			lamportsToWrap = Math.min(
-				amountExtraCollateralRequired,
-				wrappableLamports,
-			);
-
 			oix_createWSolAta = await makeCreateAtaIxIfNeeded(
 				this.connection,
 				this.splWallets[marketIndexCollateral],
@@ -590,22 +553,7 @@ export class AutoRepayBot extends AppLogger {
 			);
 		}
 
-		if (lamportsToWrap > 0) {
-			oix_wrapSol.push(
-				SystemProgram.transfer({
-					fromPubkey: marketKeypair.publicKey,
-					toPubkey: this.splWallets[MARKET_INDEX_SOL],
-					lamports: lamportsToWrap,
-				}),
-				createSyncNativeInstruction(this.splWallets[MARKET_INDEX_SOL]),
-			);
-		}
-
 		// Build instructions
-		const amountCollateralToBorrow = Math.max(
-			0,
-			amountExtraCollateralRequired - lamportsToWrap,
-		);
 		const isOwnerSigner = false;
 		const { ixs: ixs_autoRepay, lookupTables: pyraLookupTables } =
 			await user.makeSwapIxs(
@@ -617,11 +565,7 @@ export class AutoRepayBot extends AppLogger {
 				isOwnerSigner,
 			);
 
-		const instructions = [
-			...oix_createWSolAta,
-			...oix_wrapSol,
-			...ixs_autoRepay,
-		];
+		const instructions = [...oix_createWSolAta, ...ixs_autoRepay];
 
 		let transaction: VersionedTransaction;
 
@@ -647,7 +591,6 @@ export class AutoRepayBot extends AppLogger {
 		const signature = await retryWithBackoff(async () =>
 			this.connection.sendRawTransaction(transaction.serialize()),
 		);
-
 		return signature;
 	}
 
