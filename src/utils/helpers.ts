@@ -1,4 +1,4 @@
-import { SwapMode } from "@jup-ag/api";
+import { SwapMode, type QuoteResponse } from "@jup-ag/api";
 import {
 	baseUnitToDecimal,
 	decimalToBaseUnit,
@@ -20,8 +20,8 @@ import {
 	SWAP_SLIPPAGE_BPS,
 	SLIPPAGE_ERROR_CODES,
 } from "../config/constants.js";
-import { getJupiterSwapQuote } from "./jupiter.js";
 import type { PythResponse } from "../types/PythResponse.interface.js";
+import { getJupiterSwapQuote } from "./jupiter.js";
 
 export async function fetchExactOutParams(
 	marketIndexCollateral: MarketIndex,
@@ -30,7 +30,11 @@ export async function fetchExactOutParams(
 	loanPrice: number,
 	collateralPrice: number,
 	collateralBalance: number,
-) {
+): Promise<{
+	quote: QuoteResponse;
+	marketIndexLoan: MarketIndex;
+	marketIndexCollateral: MarketIndex;
+}> {
 	// Ensure the collateral required for the loan repay is not higher than the collateral balance
 	const collateralBalanceValue =
 		baseUnitToDecimal(collateralBalance, marketIndexCollateral) *
@@ -56,7 +60,7 @@ export async function fetchExactOutParams(
 		loanEquivalentBaseUnits,
 	);
 
-	await getJupiterSwapQuote(
+	const quote = await getJupiterSwapQuote(
 		SwapMode.ExactOut,
 		TOKENS[marketIndexLoan].mint,
 		TOKENS[marketIndexCollateral].mint,
@@ -65,8 +69,7 @@ export async function fetchExactOutParams(
 	);
 
 	return {
-		swapMode: SwapMode.ExactOut,
-		swapAmountBaseUnits: Math.floor(repayAmountLoan),
+		quote,
 		marketIndexLoan,
 		marketIndexCollateral,
 	};
@@ -78,7 +81,11 @@ export async function fetchExactInParams(
 	loanRepayUsdcValue: number,
 	collateralPrice: number,
 	collateralBalance: number,
-) {
+): Promise<{
+	quote: QuoteResponse;
+	marketIndexLoan: MarketIndex;
+	marketIndexCollateral: MarketIndex;
+}> {
 	const loanRepayValue = baseUnitToDecimal(
 		loanRepayUsdcValue,
 		MARKET_INDEX_USDC,
@@ -93,7 +100,7 @@ export async function fetchExactInParams(
 		collateralBalance,
 	);
 
-	await getJupiterSwapQuote(
+	const quote = await getJupiterSwapQuote(
 		SwapMode.ExactIn,
 		TOKENS[marketIndexCollateral].mint,
 		TOKENS[marketIndexLoan].mint,
@@ -102,8 +109,7 @@ export async function fetchExactInParams(
 	);
 
 	return {
-		swapMode: SwapMode.ExactIn,
-		swapAmountBaseUnits: Math.floor(repayAmountCollateral),
+		quote,
 		marketIndexLoan,
 		marketIndexCollateral,
 	};
